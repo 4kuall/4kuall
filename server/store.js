@@ -8,7 +8,20 @@ import path from 'node:path';
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
 const DB_URL = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
-export const mode = DB_URL ? 'supabase' : 'local';
+export let mode = DB_URL ? 'supabase' : 'local';
+/** Plain-English reason Supabase couldn't be used (shown in the app), or ''. */
+export let storageError = '';
+
+function explainDbError(err) {
+  const m = String(err?.message || err);
+  if (/\[YOUR-PASSWORD\]|\[|\]/.test(DB_URL)) return 'DATABASE_URL still contains [YOUR-PASSWORD] or brackets — replace it with your real Supabase database password (no brackets).';
+  if (/db\.[a-z0-9]+\.supabase\.co/.test(DB_URL)) return 'DATABASE_URL is the "Direct connection" string. In Supabase click Connect and copy the "Session pooler" string instead.';
+  if (/password authentication failed/i.test(m)) return 'Supabase rejected the password in DATABASE_URL. Reset it in Supabase → Project Settings → Database, then update DATABASE_URL.';
+  if (/Invalid URL|invalid connection/i.test(m) || !/^postgres(ql)?:\/\//.test(DB_URL)) return 'DATABASE_URL is not a valid connection string — it should start with postgresql:// (Supabase → Connect → Session pooler).';
+  if (/ENOTFOUND|getaddrinfo/i.test(m)) return 'The database address in DATABASE_URL could not be found — copy the Session pooler string from Supabase again.';
+  if (/timeout|timed out/i.test(m)) return 'Timed out reaching Supabase. Check the project is running (not paused) and you used the Session pooler string.';
+  return `Could not connect to Supabase: ${m}`;
+}
 
 export const DEFAULT_PROFILE = {
   name: '',
@@ -73,13 +86,29 @@ export async function init() {
     return;
   }
 
+  try {
+    await initDatabase();
+  } catch (err) {
+    // Never crash on a bad database setting: run on temporary local storage and say why.
+    storageError = explainDbError(err);
+    console.error(`  ! Supabase unavailable — using temporary local storage.\n    ${storageError}`);
+    await pool?.end().catch(() => {});
+    pool = null;
+    mode = 'local';
+    return init();
+  }
+}
+
+async function initDatabase() {
   const { default: pg } = await import('pg');
   const local = /@(localhost|127\.0\.0\.1)[:/]/.test(DB_URL);
   pool = new pg.Pool({
     connectionString: DB_URL,
     ssl: local ? false : { rejectUnauthorized: false },
     max: 4,
+    connectionTimeoutMillis: 15000,
   });
+  pool.on('error', (err) => console.error('[store] database connection error:', err.message));
   await pool.query(SCHEMA);
   for (const row of (await pool.query('select key, value from oracle_kv')).rows) kv.set(row.key, row.value);
   const docs = (await pool.query('select meta from oracle_docs order by created_at')).rows.map((r) => r.meta);

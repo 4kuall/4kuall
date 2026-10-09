@@ -573,7 +573,9 @@ async function loadStatus() {
   $('#pill-mind').className = `pill status ${s.claude ? 'on' : 'off'}`;
   $('#pill-voice').className = `pill status ${s.elevenlabs ? 'on' : ''}`;
   $('#lib-count').textContent = s.library.works;
-  const eyebrow = !s.claude
+  const eyebrow = s.storageError
+    ? `⚠ Memory isn't being saved — ${s.storageError}`
+    : !s.claude
     ? 'Asleep — set ANTHROPIC_API_KEY on the server'
     : s.library.works
       ? `${s.library.works} works · ${s.library.passages.toLocaleString()} passages${s.library.semantic.ready ? ' · semantic memory on' : ''}`

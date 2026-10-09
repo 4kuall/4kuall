@@ -42,6 +42,7 @@ app.get('/api/status', (_req, res) => {
     claude,
     elevenlabs: eleven,
     storage: store.mode,
+    storageError: store.storageError,
     live: Boolean(process.env.ELEVENLABS_API_KEY && AGENT_ID),
     library: lib,
     integrations: [
@@ -50,7 +51,7 @@ app.get('/api/status', (_req, res) => {
       { id: 'live', name: 'Live conversation', role: 'Real-time voice · Eleven v4 Turbo · interruptible', connected: eleven && Boolean(AGENT_ID), detail: eleven && AGENT_ID ? 'Tap "Go live" to talk' : 'Set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID' },
       { id: 'elevenlabs', name: 'ElevenLabs', role: 'Voice out · speech-to-text in', connected: eleven, detail: eleven ? 'Voice + Scribe STT' : 'Set ELEVENLABS_API_KEY (browser voice used meanwhile)' },
       { id: 'huggingface', name: 'Hugging Face', role: 'Semantic search (local embeddings)', connected: lib.semantic.enabled && lib.semantic.ready, detail: lib.semantic.error || (lib.semantic.ready ? `${lib.semantic.indexedWorks}/${lib.works} works indexed${lib.semantic.pending ? ` · ${lib.semantic.pending} passages queued` : ''}` : 'Loads on first use') },
-      { id: 'supabase', name: 'Supabase', role: 'Cloud memory: library, soul & history on every device', connected: store.mode === 'supabase', detail: store.mode === 'supabase' ? 'Connected via DATABASE_URL' : 'Local files — set DATABASE_URL to sync' },
+      { id: 'supabase', name: 'Supabase', role: 'Cloud memory: library, soul & history on every device', connected: store.mode === 'supabase', detail: store.storageError || (store.mode === 'supabase' ? 'Connected via DATABASE_URL' : 'Local files — set DATABASE_URL to sync') },
       { id: 'gutenberg', name: 'Project Gutenberg', role: '70,000+ free classics, one click', connected: true, detail: 'Open Discover' },
       { id: 'web', name: 'Blogs · Reddit · GitHub', role: 'Absorb any link', connected: true, detail: 'Paste a URL in the Library' },
     ],
