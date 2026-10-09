@@ -15,8 +15,8 @@ export let storageError = '';
 function explainDbError(err) {
   const m = String(err?.message || err);
   if (/\[YOUR-PASSWORD\]|\[|\]/.test(DB_URL)) return 'DATABASE_URL still contains [YOUR-PASSWORD] or brackets — replace it with your real Supabase database password (no brackets).';
-  if (/db\.[a-z0-9]+\.supabase\.co/.test(DB_URL)) return 'DATABASE_URL is the "Direct connection" string. In Supabase click Connect and copy the "Session pooler" string instead.';
-  if (/password authentication failed/i.test(m)) return 'Supabase rejected the password in DATABASE_URL. Reset it in Supabase → Project Settings → Database, then update DATABASE_URL.';
+  if (/password authentication failed/i.test(m)) return 'Supabase rejected the password in DATABASE_URL. Reset it in Supabase → Project Settings → Database (letters and numbers only), then put the new password in DATABASE_URL.';
+  if (/db\.[a-z0-9]+\.supabase\.co/.test(DB_URL)) return `Couldn't reach your Supabase project from its "Direct connection" address (${m}). Check the project isn't paused, or paste the "Session pooler" string from Supabase → Connect.`;
   if (/Invalid URL|invalid connection/i.test(m) || !/^postgres(ql)?:\/\//.test(DB_URL)) return 'DATABASE_URL is not a valid connection string — it should start with postgresql:// (Supabase → Connect → Session pooler).';
   if (/ENOTFOUND|getaddrinfo/i.test(m)) return 'The database address in DATABASE_URL could not be found — copy the Session pooler string from Supabase again.';
   if (/timeout|timed out/i.test(m)) return 'Timed out reaching Supabase. Check the project is running (not paused) and you used the Session pooler string.';
@@ -103,11 +103,62 @@ export async function init() {
   }
 }
 
+// Supabase's "Direct connection" address (db.<ref>.supabase.co) is IPv6-only, which
+// many hosts (Render included) can't reach. Its "Session pooler" address works
+// everywhere but depends on the project's region, so we find it ourselves: try the
+// pooler in every Supabase region at once and keep the one that accepts the login.
+const SUPABASE_REGIONS = [
+  'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'ca-central-1', 'sa-east-1',
+  'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-central-2', 'eu-north-1',
+  'ap-south-1', 'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-northeast-2',
+];
+
+export function poolerCandidates(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const ref = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/)?.[1];
+  if (!ref || !u.password) return null;
+  const db = u.pathname.replace(/^\//, '') || 'postgres';
+  return [0, 1, 2].flatMap((n) => SUPABASE_REGIONS.map(
+    (r) => `postgresql://postgres.${ref}:${u.password}@aws-${n}-${r}.pooler.supabase.com:5432/${db}`,
+  ));
+}
+
+/** Resolves to the first candidate that accepts a login. `connect(url)` must throw on failure. */
+export async function firstWorking(candidates, connect) {
+  let passwordRejected = false;
+  try {
+    return await Promise.any(candidates.map((c) => connect(c).then(() => c, (err) => {
+      if (/password authentication failed/i.test(err.message)) passwordRejected = true;
+      throw err;
+    })));
+  } catch {
+    throw new Error(passwordRejected ? 'password authentication failed' : 'no Supabase pooler accepted this project — is the project paused?');
+  }
+}
+
+async function resolveDbUrl(pg) {
+  const candidates = poolerCandidates(DB_URL);
+  if (!candidates) return DB_URL;
+  console.log('  ▸ DATABASE_URL is a Supabase direct address — finding its Session pooler…');
+  const url = await firstWorking(candidates, async (c) => {
+    const client = new pg.Client({ connectionString: c, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 12000 });
+    try {
+      await client.connect();
+    } finally {
+      client.end().catch(() => {});
+    }
+  });
+  console.log(`  ▸ found it: ${new URL(url).hostname}`);
+  return url;
+}
+
 async function initDatabase() {
   const { default: pg } = await import('pg');
   const local = /@(localhost|127\.0\.0\.1)[:/]/.test(DB_URL);
+  const connectionString = local ? DB_URL : await resolveDbUrl(pg);
   pool = new pg.Pool({
-    connectionString: DB_URL,
+    connectionString,
     ssl: local ? false : { rejectUnauthorized: false },
     max: 4,
     connectionTimeoutMillis: 15000,
