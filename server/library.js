@@ -3,7 +3,7 @@
 import crypto from 'node:crypto';
 import AdmZip from 'adm-zip';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import { load, save } from './store.js';
+import * as store from './store.js';
 import * as semantic from './semantic.js';
 
 const CHUNK_WORDS = 220;
@@ -16,11 +16,10 @@ const STOPWORDS = new Set(
   should about than too very just also been being am all any some more most such only`.split(/\s+/),
 );
 
-let library = load('library', { docs: [], chunks: [] });
+const library = store.loadLibrary();
 let index = buildIndex(library.chunks);
 
 // Backfill semantic vectors for any works that don't have them yet.
-semantic.load(library.docs.map((d) => d.id));
 for (const d of library.docs) {
   if (!semantic.has(d.id)) semantic.enqueue(d.id, library.chunks.filter((c) => c.docId === d.id).map((c) => c.text));
 }
@@ -123,7 +122,7 @@ export function stats() {
   };
 }
 
-export function addDocument({ title, author = '', source = '', type = 'text', text, cover = '' }) {
+export async function addDocument({ title, author = '', source = '', type = 'text', text, cover = '' }) {
   const clean = (text || '').trim();
   if (clean.length < 40) throw new Error('Not enough readable text found in that source.');
   const id = crypto.randomUUID();
@@ -139,19 +138,26 @@ export function addDocument({ title, author = '', source = '', type = 'text', te
     passages: pieces.length,
     addedAt: new Date().toISOString(),
   };
+  const chunks = pieces.map((text, i) => ({ docId: id, i, text }));
   library.docs.push(doc);
-  pieces.forEach((p, i) => library.chunks.push({ docId: id, i, text: p }));
-  save('library', library);
+  library.chunks.push(...chunks);
+  try {
+    await store.putDoc(doc, chunks);
+  } catch (err) {
+    library.docs = library.docs.filter((d) => d.id !== id);
+    library.chunks = library.chunks.filter((c) => c.docId !== id);
+    throw err;
+  }
   index = buildIndex(library.chunks);
   semantic.enqueue(id, pieces);
   return doc;
 }
 
-export function removeDocument(id) {
+export async function removeDocument(id) {
   semantic.remove(id);
   library.docs = library.docs.filter((d) => d.id !== id);
   library.chunks = library.chunks.filter((c) => c.docId !== id);
-  save('library', library);
+  await store.deleteDoc(id);
   index = buildIndex(library.chunks);
 }
 

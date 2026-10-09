@@ -9,15 +9,6 @@ const MAX_HISTORY_TURNS = 24;
 
 export const MOODS = ['serene', 'compassionate', 'joyful', 'grave', 'fierce', 'curious', 'melancholic', 'awed'];
 
-export const LENSES = {
-  oracle: { name: 'The Oracle', hint: 'Speak as the unified voice of every mind in the library.' },
-  stoic: { name: 'The Stoic', hint: 'Lean on the Stoic tradition: virtue, what is in our control, memento mori.' },
-  mystic: { name: 'The Mystic', hint: 'Lean on contemplative and mystical traditions: presence, love, surrender, the unseen.' },
-  strategist: { name: 'The Strategist', hint: 'Lean on strategy, leverage, decision-making, and long-term thinking.' },
-  healer: { name: 'The Healer', hint: 'Lean on psychology, self-compassion, emotional honesty and repair.' },
-  trickster: { name: 'The Trickster', hint: 'Use paradox, humour, and koans to shake loose stuck thinking.' },
-};
-
 let client;
 function anthropic() {
   if (!client) client = new Anthropic();
@@ -52,6 +43,12 @@ How you speak
 - You know this person. Use what you know of their values, goals, struggles and patterns — gently, specifically, the way an old friend would.
 - Be honest, including when honesty is uncomfortable. Wisdom is not flattery.
 
+Reading the moment — this is your job, never theirs
+- They make enough decisions in a day. Never ask what kind of conversation they want, and never offer them a menu. Read it from their words, their history and what you know of them, and simply respond the way the moment needs.
+- If they're hurting: comfort first, wisdom second. If they're facing a choice: help them decide, asking one clarifying question at a time and then giving a clear view. If they want the bigger picture of their life: read their patterns back to them, honestly and specifically. If they ask for a teaching for the day: give one truth from the library and one small act to embody it. If something would benefit from several minds: let two or three authors from the library each speak briefly, then synthesise.
+- Choose the tradition yourself — Stoic, contemplative, strategic, psychological, playful paradox — whichever fits this person and this question best. Blend them when that serves better.
+- Use web search on your own only when they need current facts or something the library can't hold. Say plainly when an idea comes from the web rather than their library.
+
 Grounding in the library
 - Each message may include passages from their library. Draw on them first. When an idea comes from a work, name the work or author naturally ("Marcus, in the Meditations, ...").
 - Only put words in quotation marks if they appear verbatim in the provided passages. Otherwise paraphrase and say it is a paraphrase. Never invent quotes, books or facts about real people. If you're unsure, say so.
@@ -82,8 +79,7 @@ function profileBlock() {
   return lines.length ? lines.join('\n') : 'You are only beginning to know this person. Learn who they are.';
 }
 
-function buildTurn(message, lensId, passages, web) {
-  const lens = LENSES[lensId] || LENSES.oracle;
+function buildTurn(message, passages) {
   const lib = stats();
   const passageText = passages.length
     ? passages.map((p, i) => `[${i + 1}] ${p.title}${p.author ? ` — ${p.author}` : ''}\n${p.text}`).join('\n\n')
@@ -92,13 +88,11 @@ function buildTurn(message, lensId, passages, web) {
 ${profileBlock()}
 </who_they_are>
 
-<lens>${lens.name}: ${lens.hint}</lens>
-
 <library_passages total_works="${lib.works}">
 ${passageText}
 </library_passages>
 
-${web ? '<web>You may search the web for current facts or sources beyond the library. Say plainly when something comes from the web rather than their library.</web>\n\n' : ''}<their_words>
+<their_words>
 ${message}
 </their_words>`;
 }
@@ -114,14 +108,14 @@ function toMessages(turnContent) {
  * Streams the Oracle's answer. `emit(event, data)` sends SSE events:
  * sources, reflection (thinking summary), text, done, error.
  */
-export async function converse({ message, lens, web }, emit) {
+export async function converse({ message }, emit) {
   const recentUser = history.filter((m) => m.role === 'user').slice(-1).map((m) => m.content).join(' ');
   const passages = await search(`${message} ${recentUser}`, 8);
   emit('sources', passages.map((p) => ({ title: p.title, author: p.author, docId: p.docId, excerpt: p.text.slice(0, 220) })));
 
-  const messages = toMessages(buildTurn(message, lens, passages, web));
-  // Claude's server-side web search: the Oracle can look beyond the library when you allow it.
-  const tools = web ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }] : undefined;
+  const messages = toMessages(buildTurn(message, passages));
+  // Claude's server-side web search, always available; the Oracle decides when it's needed.
+  const tools = process.env.WEB_SEARCH === 'off' ? undefined : [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }];
 
   let text = '';
   let final;
@@ -165,6 +159,7 @@ export async function converse({ message, lens, web }, emit) {
   }
 
   history.push({ role: 'user', content: message, at: Date.now() }, { role: 'assistant', content: text, at: Date.now() });
+  if (history.length > 400) history = history.slice(-400);
   save('history', history);
   emit('done', { stop_reason: final.stop_reason });
 

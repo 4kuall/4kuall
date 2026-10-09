@@ -9,6 +9,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Oracle" />
   <script type="importmap">
     {
       "imports": {
@@ -55,7 +61,6 @@
     <section class="answer" id="answer" hidden>
       <header>
         <span class="mood" id="mood-badge">Listening</span>
-        <span class="lens-tag" id="lens-tag">The Oracle</span>
         <span class="spacer"></span>
         <button class="icon-btn" id="replay" title="Speak again">↻</button>
         <button class="icon-btn" id="toggle-log" title="Transcript">☰</button>
@@ -65,29 +70,12 @@
       <div class="sources" id="sources"></div>
     </section>
 
-    <section class="quick" id="quick">
-      <button class="card action" data-prompt="Look at my life as you know it. What do you see that I cannot?">
-        <span class="ico">◉</span><b>Third-eye vision <span class="badge">New</span></b><small>What it sees that you can't</small>
-      </button>
-      <button class="card action" data-prompt="Give me one piece of wisdom for today, drawn from my library, and one small act to embody it.">
-        <span class="ico">☀</span><b>Today's teaching</b><small>One truth, one small act</small>
-      </button>
-      <button class="card action" data-prompt="I have a decision to make. Ask me what you need to know, one question at a time.">
-        <span class="ico">⚖</span><b>Help me decide <span class="badge hot">Top</span></b><small>Socratic, one question at a time</small>
-      </button>
-      <button class="card action" data-prompt="Convene the council: let three different authors from my library each speak briefly on what I'm facing right now, then give me your synthesis.">
-        <span class="ico">✦</span><b>Council of sages</b><small>Three minds, one synthesis</small>
-      </button>
-    </section>
 
     <form class="composer" id="ask">
       <textarea id="input" rows="1" placeholder="Speak what is on your heart…" autocomplete="off"></textarea>
       <div class="composer-row">
-        <div class="lenses" id="lenses"></div>
+        <span class="hint" id="hint">It reads what you need. Just speak.</span>
         <span class="spacer"></span>
-        <label class="toggle-pill" title="Let the Oracle search the web"><input type="checkbox" id="web-on" /><span>⌁ Web</span></label>
-        <label class="toggle-pill" title="Speak replies aloud"><input type="checkbox" id="voice-on" /><span>♪ Voice</span></label>
-        <label class="toggle-pill" title="Ambient soundscape"><input type="checkbox" id="ambience-on" /><span>∿ Ambience</span></label>
         <button type="button" id="mic" class="mic" title="Speak">🎙</button>
         <button type="submit" class="btn-lime" id="send">Ask <span>↗</span></button>
       </div>
@@ -168,7 +156,9 @@
         <b>Voice</b><small>ElevenLabs when connected, otherwise your browser's voice</small>
         <label>ElevenLabs voice<select id="voice-select"><option value="">Server default</option></select></label>
         <label>Browser voice (fallback)<select id="browser-voice"></select></label>
+        <label class="check"><input type="checkbox" id="voice-on" /> Speak replies aloud</label>
         <label class="check"><input type="checkbox" id="handsfree" /> Hands-free: listen again after the Oracle speaks</label>
+        <label class="check"><input type="checkbox" id="ambience-on" /> Ambient soundscape</label>
       </div>
       <div class="card form">
         <b>Access & memory</b><small>For when you host it beyond localhost</small>
@@ -180,6 +170,17 @@
 
   <!-- Transcript drawer -->
   <aside id="log" class="drawer"><div class="drawer-head"><b>Transcript</b><button class="icon-btn" id="close-log">✕</button></div><div id="log-body"></div></aside>
+
+  <!-- Passcode lock (shown when the server has ACCESS_TOKEN set) -->
+  <div class="lock" id="lock" hidden>
+    <form class="lock-card" id="lock-form">
+      <span class="logo big"><svg viewBox="0 0 32 32"><path d="M4 16c3.5-5.5 8-8 12-8s8.5 2.5 12 8c-3.5 5.5-8 8-12 8s-8.5-2.5-12-8z"/><circle cx="16" cy="16" r="4"/></svg></span>
+      <h2>The <em>Oracle</em></h2>
+      <p id="lock-msg">Enter your passcode to wake the Oracle.</p>
+      <input id="lock-input" type="password" autocomplete="current-password" placeholder="Passcode" />
+      <button class="btn-lime">Enter ↗</button>
+    </form>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

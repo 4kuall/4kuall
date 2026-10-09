@@ -1,20 +1,35 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
-import * as library from './library.js';
-import * as oracle from './oracle.js';
+import * as store from './store.js';
+
+// Load everything the Oracle knows (local files or Supabase) before the modules that use it.
+await store.init();
+const library = await import('./library.js');
+const oracle = await import('./oracle.js');
 
 const app = express();
+app.set('trust proxy', 1);
+// Cloud hosts poll this to know the server is alive.
+app.get('/healthz', (_req, res) => res.send('ok'));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 * 1024 * 1024 } });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.resolve('web')));
 
-// Optional shared-secret gate so you can host it without the world reading your soul.
+// Passcode gate so you can host it without the world reading your soul.
+// In the cloud (REQUIRE_ACCESS_TOKEN=true) the API stays locked until ACCESS_TOKEN is set.
+const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
 app.use('/api', (req, res, next) => {
   const secret = process.env.ACCESS_TOKEN;
-  if (!secret || req.get('x-access-token') === secret) return next();
-  res.status(401).json({ error: 'Access token required.' });
+  if (!secret) {
+    if (process.env.REQUIRE_ACCESS_TOKEN === 'true') return res.status(503).json({ error: 'Set ACCESS_TOKEN on the server to unlock the Oracle.', locked: true });
+    return next();
+  }
+  if (crypto.timingSafeEqual(sha(req.get('x-access-token') || ''), sha(secret))) return next();
+  res.status(401).json({ error: 'Passcode required.', locked: true });
 });
 
 app.get('/api/status', (_req, res) => {
@@ -24,16 +39,17 @@ app.get('/api/status', (_req, res) => {
   res.json({
     claude,
     elevenlabs: eleven,
+    storage: store.mode,
     library: lib,
     integrations: [
       { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? process.env.ORACLE_MODEL || 'claude-opus-5-5' : 'Set ANTHROPIC_API_KEY' },
-      { id: 'websearch', name: 'Web Search', role: 'Live knowledge beyond your library', connected: claude, detail: 'Toggle "Web" in the composer' },
+      { id: 'websearch', name: 'Web Search', role: 'Live knowledge beyond your library', connected: claude, detail: 'Automatic — the Oracle searches only when it needs to' },
       { id: 'elevenlabs', name: 'ElevenLabs', role: 'Voice out · speech-to-text in', connected: eleven, detail: eleven ? 'Voice + Scribe STT' : 'Set ELEVENLABS_API_KEY (browser voice used meanwhile)' },
       { id: 'huggingface', name: 'Hugging Face', role: 'Semantic search (local embeddings)', connected: lib.semantic.enabled && lib.semantic.ready, detail: lib.semantic.error || (lib.semantic.ready ? `${lib.semantic.indexedWorks}/${lib.works} works indexed${lib.semantic.pending ? ` · ${lib.semantic.pending} passages queued` : ''}` : 'Loads on first use') },
+      { id: 'supabase', name: 'Supabase', role: 'Cloud memory: library, soul & history on every device', connected: store.mode === 'supabase', detail: store.mode === 'supabase' ? 'Connected via DATABASE_URL' : 'Local files — set DATABASE_URL to sync' },
       { id: 'gutenberg', name: 'Project Gutenberg', role: '70,000+ free classics, one click', connected: true, detail: 'Open Discover' },
       { id: 'web', name: 'Blogs · Reddit · GitHub', role: 'Absorb any link', connected: true, detail: 'Paste a URL in the Library' },
     ],
-    lenses: Object.entries(oracle.LENSES).map(([id, l]) => ({ id, name: l.name })),
   });
 });
 
@@ -46,7 +62,7 @@ app.post('/api/library/upload', upload.array('files', 50), async (req, res) => {
   for (const file of req.files || []) {
     try {
       const r = await library.extractFromFile(file);
-      added.push(library.addDocument({ ...r, author: req.body.author || r.author, source: file.originalname }));
+      added.push(await library.addDocument({ ...r, author: req.body.author || r.author, source: file.originalname }));
     } catch (err) {
       failed.push({ name: file.originalname, error: err.message });
     }
@@ -57,16 +73,16 @@ app.post('/api/library/upload', upload.array('files', 50), async (req, res) => {
 app.post('/api/library/url', async (req, res) => {
   try {
     const r = await library.extractFromUrl(String(req.body.url || ''));
-    res.json(library.addDocument({ ...r, source: req.body.url }));
+    res.json(await library.addDocument({ ...r, source: req.body.url }));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.post('/api/library/text', (req, res) => {
+app.post('/api/library/text', async (req, res) => {
   try {
     const { title, author, text } = req.body;
-    res.json(library.addDocument({ title, author, text, type: 'note', source: 'pasted' }));
+    res.json(await library.addDocument({ title, author, text, type: 'note', source: 'pasted' }));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -88,9 +104,13 @@ app.post('/api/gutenberg/import', async (req, res) => {
   }
 });
 
-app.delete('/api/library/:id', (req, res) => {
-  library.removeDocument(req.params.id);
-  res.json({ ok: true });
+app.delete('/api/library/:id', async (req, res) => {
+  try {
+    await library.removeDocument(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Soul profile & memory ----------
@@ -113,7 +133,7 @@ app.post('/api/chat', async (req, res) => {
   });
   const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   try {
-    await oracle.converse({ message, lens: req.body.lens, web: Boolean(req.body.web) }, emit);
+    await oracle.converse({ message }, emit);
   } catch (err) {
     console.error('[chat]', err);
     emit('error', err.status === 401 || /authentication/i.test(err.message) ? 'The Oracle has no key to the world yet — set ANTHROPIC_API_KEY.' : err.message);
@@ -177,4 +197,12 @@ app.get('/api/voices', async (_req, res) => {
 });
 
 const port = Number(process.env.PORT || 3333);
-app.listen(port, () => console.log(`\n  ◉  The Oracle is awake at http://localhost:${port}\n`));
+app.listen(port, '0.0.0.0', () => {
+  console.log(`\n  ◉  The Oracle is awake at http://localhost:${port}`);
+  // Same Wi-Fi? Your phone can open one of these (typing works; the mic needs the HTTPS cloud version).
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) if (a.family === 'IPv4' && !a.internal) console.log(`     on your Wi-Fi: http://${a.address}:${port}`);
+  }
+  if (process.env.REQUIRE_ACCESS_TOKEN === 'true' && !process.env.ACCESS_TOKEN) console.warn('  ! ACCESS_TOKEN is not set — the API is locked.');
+  console.log('');
+});

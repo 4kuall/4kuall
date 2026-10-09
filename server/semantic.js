@@ -1,16 +1,12 @@
 // Semantic memory: Hugging Face sentence embeddings (all-MiniLM-L6-v2) run locally
 // through transformers.js. The model (~23 MB) downloads from the Hugging Face Hub
-// once, then everything stays on this machine. Vectors are stored per work in
-// data/vectors/<docId>.f32 so retrieval can find passages by meaning, not just words.
-import fs from 'node:fs';
-import path from 'node:path';
+// once, then everything stays on this machine. Vectors are stored per work
+// (locally or in Supabase) so retrieval can find passages by meaning, not just words.
+import * as store from './store.js';
 
 const DIM = 384;
 const MODEL = process.env.EMBEDDING_MODEL || 'Xenova/all-MiniLM-L6-v2';
-const DIR = path.resolve(process.env.DATA_DIR || 'data', 'vectors');
-fs.mkdirSync(DIR, { recursive: true });
-
-const vectors = new Map(); // docId -> Float32Array (passages × DIM)
+const vectors = store.loadVectors(); // docId -> Float32Array (passages × DIM)
 const queue = [];
 let extractor;
 let loading;
@@ -41,15 +37,6 @@ async function embed(texts) {
   return out.data; // Float32Array, texts.length × DIM
 }
 
-export function load(docIds) {
-  for (const id of docIds) {
-    const file = path.join(DIR, `${id}.f32`);
-    if (!fs.existsSync(file)) continue;
-    const buf = fs.readFileSync(file);
-    vectors.set(id, new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
-  }
-}
-
 export function has(docId) {
   return vectors.has(docId);
 }
@@ -73,8 +60,7 @@ async function drain() {
         all.set(await embed(batch), i * DIM);
         state.pending -= batch.length;
       }
-      fs.writeFileSync(path.join(DIR, `${docId}.f32`), Buffer.from(all.buffer));
-      vectors.set(docId, all);
+      if (!removed.has(docId)) await store.putVectors(docId, all);
     } catch (err) {
       console.warn('[semantic] embedding failed:', err.message);
       state.pending = 0;
@@ -83,9 +69,10 @@ async function drain() {
   working = false;
 }
 
+const removed = new Set();
 export function remove(docId) {
+  removed.add(docId);
   vectors.delete(docId);
-  fs.rmSync(path.join(DIR, `${docId}.f32`), { force: true });
 }
 
 /** Returns [{docId, i, score}] ranked by cosine similarity. */

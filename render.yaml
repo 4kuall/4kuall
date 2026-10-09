@@ -1,0 +1,27 @@
+# One-click cloud hosting on Render (https://render.com).
+# "New → Blueprint" (or the Deploy button in the README) reads this file and
+# asks you for the values marked sync: false.
+services:
+  - type: web
+    name: oracle-third-eye
+    runtime: node
+    plan: free # free sleeps after ~15 min idle; "starter" stays awake
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DATABASE_URL # Supabase → Connect → Session pooler connection string
+        sync: false
+      - key: ACCESS_TOKEN # the passcode you'll type on your phone
+        sync: false
+      - key: REQUIRE_ACCESS_TOKEN
+        value: "true"
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: zfWx5IjUaWGWTId9hv9t

@@ -16,7 +16,7 @@ const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
-const settings = { voice: true, handsfree: false, web: false, ambience: false, voiceId: '', browserVoice: '', lens: 'oracle', token: '', ...store.get('oracle.settings', {}) };
+const settings = { voice: true, handsfree: false, ambience: false, voiceId: '', browserVoice: '', token: '', ...store.get('oracle.settings', {}) };
 const persist = () => store.set('oracle.settings', settings);
 
 async function api(path, opts = {}) {
@@ -29,10 +29,34 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    if (err.locked) showLock(err.error);
     throw new Error(err.error || res.statusText);
   }
   return res;
 }
+
+// ───────────────── Passcode lock (cloud) ─────────────────
+function showLock(message) {
+  const lock = $('#lock');
+  if (!lock.hidden) return;
+  lock.hidden = false;
+  $('#lock-msg').textContent = message === 'Passcode required.' ? 'Enter your passcode to wake the Oracle.' : message;
+  setTimeout(() => $('#lock-input').focus(), 50);
+}
+$('#lock-form').onsubmit = async (e) => {
+  e.preventDefault();
+  settings.token = $('#lock-input').value.trim();
+  persist();
+  const res = await fetch('/api/status', { headers: { 'x-access-token': settings.token } });
+  if (res.ok) {
+    $('#lock').hidden = true;
+    $('#token').value = settings.token;
+    location.reload();
+  } else {
+    $('#lock-msg').textContent = 'That is not the passcode.';
+    $('#lock-input').select();
+  }
+};
 const getJSON = async (path, opts) => (await api(path, opts)).json();
 
 // ───────────────── Views ─────────────────
@@ -80,8 +104,14 @@ let usingBrowserVoice = false;
 let lastSpoken = [];
 
 function ensureAudio() {
-  if (audioCtx) return;
-  audioCtx = new AudioContext();
+  // Phones only allow sound that starts from a tap; resuming here (always called
+  // from a tap or submit) keeps the context unlocked for the voice that follows.
+  if (audioCtx) { if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const silent = audioCtx.createBufferSource();
+  silent.buffer = audioCtx.createBuffer(1, 1, 22050);
+  silent.connect(audioCtx.destination);
+  silent.start();
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 512;
   analyser.connect(audioCtx.destination);
@@ -111,7 +141,7 @@ function enqueueSpeech(text) {
 async function fetchVoice(text, mood) {
   try {
     const res = await api('/api/tts', { method: 'POST', json: { text, mood, voiceId: settings.voiceId } });
-    return URL.createObjectURL(await res.blob());
+    return await audioCtx.decodeAudioData(await res.arrayBuffer());
   } catch {
     return null;
   }
@@ -127,14 +157,15 @@ async function playNext() {
   }
   speaking = true;
   setState('speaking');
-  const url = item.audio ? await item.audio : null;
-  if (url) {
+  // Decoded audio plays through the (already unlocked) AudioContext — reliable on iPhone too.
+  const buffer = item.audio ? await item.audio : null;
+  if (buffer) {
     usingBrowserVoice = false;
-    const a = new Audio(url);
-    audioCtx.createMediaElementSource(a).connect(analyser);
-    a.onended = () => { URL.revokeObjectURL(url); playNext(); };
-    a.onerror = () => playNext();
-    a.play().catch(() => playNext());
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(analyser);
+    src.onended = () => playNext();
+    src.start();
   } else {
     speakWithBrowser(item.text).then(playNext);
   }
@@ -296,7 +327,6 @@ async function ask(message) {
   autoGrow();
   setState('thinking');
   $('#hero').hidden = true;
-  $('#quick').hidden = true;
   $('#answer').hidden = false;
   $('#sources').innerHTML = '';
   delete $('#mood-badge').dataset.mood;
@@ -344,7 +374,7 @@ async function ask(message) {
   };
 
   try {
-    const res = await api('/api/chat', { method: 'POST', json: { message, lens: settings.lens, web: settings.web } });
+    const res = await api('/api/chat', { method: 'POST', json: { message } });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -403,11 +433,10 @@ $('#input').addEventListener('keydown', (e) => {
 });
 function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }
 $('#input').addEventListener('input', autoGrow);
-$$('[data-prompt]').forEach((b) => (b.onclick = () => ask(b.dataset.prompt)));
 
 // ───────────────── Status & integrations ─────────────────
 const INT_COLORS = { claude: '#d97757', websearch: '#7cc4ff', elevenlabs: '#f5f6f7', huggingface: '#ffd21e', gutenberg: '#c9a6ff', web: '#d4ff3a' };
-let lensesBuilt = false;
+let voicesLoaded = false;
 async function loadStatus() {
   let s;
   try {
@@ -429,24 +458,10 @@ async function loadStatus() {
   $('#eyebrow').innerHTML = '';
   $('#eyebrow').append(el('i', 'dot'), ` ${eyebrow}`);
 
-  if (!lensesBuilt) {
-    lensesBuilt = true;
-    for (const l of s.lenses) {
-      const b = el('button', l.id === settings.lens ? 'on' : '', l.name.replace(/^The /, ''));
-      b.type = 'button';
-      b.onclick = () => {
-        settings.lens = l.id;
-        persist();
-        $('#lens-tag').textContent = l.name;
-        $$('#lenses button').forEach((x) => x.classList.toggle('on', x === b));
-      };
-      if (l.id === settings.lens) $('#lens-tag').textContent = l.name;
-      $('#lenses').append(b);
-    }
-    if (s.elevenlabs) {
-      const voices = await getJSON('/api/voices').catch(() => []);
-      for (const v of voices) $('#voice-select').append(new Option(v.name, v.id, false, v.id === settings.voiceId));
-    }
+  if (!voicesLoaded && s.elevenlabs) {
+    voicesLoaded = true;
+    const voices = await getJSON('/api/voices').catch(() => []);
+    for (const v of voices) $('#voice-select').append(new Option(v.name, v.id, false, v.id === settings.voiceId));
   }
 
   const grid = $('#int-grid');
@@ -667,7 +682,6 @@ const bindToggle = (id, key, after) => {
   $(id).onchange = (e) => { settings[key] = e.target.checked; persist(); after?.(e.target.checked); };
 };
 bindToggle('#voice-on', 'voice', (on) => !on && stopSpeaking());
-bindToggle('#web-on', 'web');
 bindToggle('#handsfree', 'handsfree');
 bindToggle('#ambience-on', 'ambience', (on) => { ensureAudio(); ambience.toggle(on); });
 $('#token').value = settings.token;
@@ -687,6 +701,9 @@ $('#forget').onclick = async () => {
 };
 // Browsers only allow sound after a gesture; resume ambience on the first one.
 addEventListener('pointerdown', () => { if (settings.ambience) { ensureAudio(); ambience.toggle(true); } }, { once: true });
+
+// ───────────────── Install as an app ─────────────────
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // ───────────────── Boot ─────────────────
 (async () => {

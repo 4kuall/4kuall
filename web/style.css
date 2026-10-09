@@ -70,7 +70,7 @@ em { font-style: normal; color: var(--lime); }
 .nav-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
 /* ───── Oracle view ───── */
-.view { position: fixed; inset: 64px 0 0 0; z-index: 5; }
+.view { position: fixed; inset: calc(64px + env(safe-area-inset-top)) 0 0 0; z-index: 5; }
 #view-oracle { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 0 20px 20px; pointer-events: none; }
 #view-oracle > * { pointer-events: auto; }
 #reflections { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); text-align: center; pointer-events: none !important; }
@@ -103,6 +103,7 @@ em { font-style: normal; color: var(--lime); }
 .sources img, .sources .sw { width: 16px; height: 22px; border-radius: 3px; object-fit: cover; background: var(--surface-2); flex: none; }
 .sources .web { padding-left: 9px; border-color: rgba(212,255,58,.3); }
 
+.hint { font-family: var(--ui); font-size: .78rem; color: var(--muted); padding-left: 10px; }
 .quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: min(780px, 100%); margin-bottom: 12px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; }
 .card > b { display: block; font-family: var(--ui); font-weight: 600; font-size: 1rem; }
@@ -209,6 +210,20 @@ details summary { cursor: pointer; color: var(--ink-2); font-size: .85rem; font-
 #log-body .msg.user { color: var(--lime); font-family: var(--ui); font-size: .82rem; }
 #log-body .msg.assistant { color: var(--ink-2); }
 
+/* ───── Passcode lock ───── */
+.lock { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(11,12,14,.82); backdrop-filter: blur(20px); }
+.lock-card { width: min(380px, 100%); text-align: center; display: grid; gap: 12px; justify-items: center; }
+.lock-card h2 { font-family: var(--display); font-weight: 400; text-transform: uppercase; font-size: 3rem; margin: 6px 0 0; line-height: .9; }
+.lock-card p { color: var(--ink-2); margin: 0 0 6px; }
+.lock-card input { text-align: center; font-size: 1.1rem; }
+.lock-card .btn-lime { width: 100%; justify-content: center; }
+.logo.big { width: 64px; height: 64px; border-radius: 18px; }
+.logo.big svg { width: 46px; }
+
+/* Installed on a phone: respect the notch and home bar. */
+.nav { padding-top: env(safe-area-inset-top); height: calc(64px + env(safe-area-inset-top)); }
+#view-oracle { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+
 /* ───── Responsive ───── */
 @media (max-width: 900px) {
   .nav { gap: 10px; padding: 0 12px; }
@@ -217,17 +232,13 @@ details summary { cursor: pointer; color: var(--ink-2); font-size: .85rem; font-
   .ingest, .two-col { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  .nav { height: auto; flex-wrap: wrap; padding: 10px 12px 6px; row-gap: 6px; }
+  .nav { height: auto; flex-wrap: wrap; padding: calc(10px + env(safe-area-inset-top)) 12px 6px; row-gap: 6px; }
   .tabs { order: 3; width: 100%; }
   .tabs button { padding: 6px 9px; font-size: .84rem; }
-  .view, .drawer { top: 104px; }
+  .view, .drawer { top: calc(104px + env(safe-area-inset-top)); }
   .quick .action:nth-child(n+3) { display: none; }
   .action .ico { margin-bottom: 6px; }
-  .composer-row { flex-wrap: wrap; }
-  .composer-row .spacer { display: none; }
-  .lenses { width: 100%; }
-  .composer-row .toggle-pill:nth-of-type(3) { display: none; }
-  #send { margin-left: auto; }
+  .hint { display: none; }
   .books { grid-template-columns: repeat(2, 1fr); }
   .said { max-height: 26vh; }
 }
