@@ -158,7 +158,17 @@ app.get('/api/live/start', async (_req, res) => {
   const r = await fetch(`https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${encodeURIComponent(AGENT_ID)}`, {
     headers: { 'xi-api-key': key },
   });
-  if (!r.ok) return res.status(502).json({ error: `ElevenLabs refused the session (${r.status}): ${(await r.text()).slice(0, 200)}` });
+  if (!r.ok) {
+    const body = await r.text();
+    const why = /key ID used as API key/i.test(body)
+      ? 'ELEVENLABS_API_KEY holds the key\'s ID, not the key itself. In ElevenLabs create a new API key, copy the long value starting with sk_, and paste that into ELEVENLABS_API_KEY.'
+      : /invalid_api_key|unauthorized/i.test(body)
+        ? 'ElevenLabs rejected ELEVENLABS_API_KEY. Create a new key in ElevenLabs (Settings → API Keys) and paste the value starting with sk_.'
+        : /missing_permissions|permission/i.test(body)
+          ? 'Your ElevenLabs API key lacks permission for Agents. Edit the key in ElevenLabs and allow ElevenAgents / Conversational AI.'
+          : `ElevenLabs refused the session (${r.status}): ${body.slice(0, 200)}`;
+    return res.status(502).json({ error: why });
+  }
   const { token } = await r.json();
   const p = oracle.getProfile();
   res.json({
