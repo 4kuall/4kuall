@@ -1,14 +1,22 @@
-import { Oracle3D } from './oracle3d.js';
+import { Oracle3D, MOOD_COLORS } from './oracle3d.js';
+import { Ambience } from './ambience.js';
 
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
 const oracle = new Oracle3D($('#stage'));
+const ambience = new Ambience();
 
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
-
-const settings = store.get('oracle.settings', { voice: true, handsfree: false, voiceId: '', browserVoice: '', lens: 'oracle', token: '' });
+const settings = { voice: true, handsfree: false, web: false, ambience: false, voiceId: '', browserVoice: '', lens: 'oracle', token: '', ...store.get('oracle.settings', {}) };
 const persist = () => store.set('oracle.settings', settings);
 
 async function api(path, opts = {}) {
@@ -19,28 +27,57 @@ async function api(path, opts = {}) {
     opts.body = JSON.stringify(opts.json);
   }
   const res = await fetch(path, { ...opts, headers });
-  if (!res.ok && !res.headers.get('content-type')?.includes('event-stream')) {
+  if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
   }
   return res;
 }
+const getJSON = async (path, opts) => (await api(path, opts)).json();
 
-// ---------------- State label ----------------
-const STATE_WORDS = { idle: 'resting', listening: 'listening', thinking: 'contemplating', speaking: 'speaking' };
+// ───────────────── Views ─────────────────
+function showView(name) {
+  document.body.dataset.view = name;
+  for (const v of $$('.view')) v.hidden = v.id !== `view-${name}`;
+  for (const t of $$('.tabs button')) t.classList.toggle('on', t.dataset.viewLink === name);
+  if (name === 'library') refreshLibrary();
+  if (name === 'discover' && !$('#gut-grid').children.length) loadClassics();
+  if (name === 'soul') refreshSoul();
+  if (name === 'integrations') loadStatus();
+  oracle.setFocus(name === 'oracle');
+}
+$$('[data-view-link]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); showView(b.dataset.viewLink); }));
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $('#log').classList.remove('open'); showView('oracle'); }
+});
+
+// ───────────────── State & mood ─────────────────
+const STATE_WORDS = { idle: 'Present', listening: 'Listening', thinking: 'Contemplating', speaking: 'Speaking' };
+let currentMood = 'serene';
 function setState(s) {
   oracle.setState(s);
-  $('#state-label').textContent = STATE_WORDS[s];
+  ambience.setState(s);
+  if (!$('#mood-badge').dataset.mood) $('#mood-badge').textContent = STATE_WORDS[s];
+}
+function setMood(mood) {
+  currentMood = MOOD_COLORS[mood] ? mood : 'serene';
+  oracle.setMood(currentMood);
+  ambience.setMood(currentMood);
+  document.documentElement.style.setProperty('--mood', MOOD_COLORS[currentMood][0]);
+  $('#mood-badge').textContent = currentMood;
+  $('#mood-badge').dataset.mood = currentMood;
 }
 
-// ---------------- Voice out ----------------
-// Sentences are voiced as they stream in, so the Oracle starts speaking quickly.
+// ───────────────── Voice out ─────────────────
+// Sentences are voiced as they stream in, so the Oracle starts speaking fast.
 let audioCtx;
 let analyser;
 const speechQueue = [];
 let speaking = false;
-let currentMood = 'serene';
 let pendingDone = null;
+let elevenAvailable = false;
+let usingBrowserVoice = false;
+let lastSpoken = [];
 
 function ensureAudio() {
   if (audioCtx) return;
@@ -48,26 +85,25 @@ function ensureAudio() {
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 512;
   analyser.connect(audioCtx.destination);
+  ambience.attach(audioCtx);
   const buf = new Uint8Array(analyser.frequencyBinCount);
   const tick = () => {
-    if (speaking && analyser) {
+    if (speaking && !usingBrowserVoice) {
       analyser.getByteTimeDomainData(buf);
       let sum = 0;
       for (const v of buf) sum += ((v - 128) / 128) ** 2;
-      const rms = Math.sqrt(sum / buf.length);
-      if (!usingBrowserVoice) oracle.setEnergy(rms * 4.5);
+      oracle.setEnergy(Math.sqrt(sum / buf.length) * 4.5);
     }
     requestAnimationFrame(tick);
   };
   tick();
 }
 
-let elevenAvailable = true;
-let usingBrowserVoice = false;
-
 function enqueueSpeech(text) {
   const clean = text.replace(/\[mood:[^\]]*\]/gi, '').replace(/[*_#>`]/g, '').trim();
-  if (!clean || !settings.voice) return;
+  if (!clean) return;
+  lastSpoken.push(clean);
+  if (!settings.voice) return;
   speechQueue.push({ text: clean, mood: currentMood, audio: elevenAvailable ? fetchVoice(clean, currentMood) : null });
   if (!speaking) playNext();
 }
@@ -77,7 +113,6 @@ async function fetchVoice(text, mood) {
     const res = await api('/api/tts', { method: 'POST', json: { text, mood, voiceId: settings.voiceId } });
     return URL.createObjectURL(await res.blob());
   } catch {
-    elevenAvailable = false;
     return null;
   }
 }
@@ -95,11 +130,11 @@ async function playNext() {
   const url = item.audio ? await item.audio : null;
   if (url) {
     usingBrowserVoice = false;
-    const el = new Audio(url);
-    audioCtx.createMediaElementSource(el).connect(analyser);
-    el.onended = () => { URL.revokeObjectURL(url); playNext(); };
-    el.onerror = () => playNext();
-    el.play().catch(() => playNext());
+    const a = new Audio(url);
+    audioCtx.createMediaElementSource(a).connect(analyser);
+    a.onended = () => { URL.revokeObjectURL(url); playNext(); };
+    a.onerror = () => playNext();
+    a.play().catch(() => playNext());
   } else {
     speakWithBrowser(item.text).then(playNext);
   }
@@ -127,72 +162,150 @@ function stopSpeaking() {
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
-// ---------------- Voice in ----------------
-const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec;
-let listening = false;
-function listen() {
-  if (!Rec) { alert('Voice input needs Chrome, Edge or Safari.'); return; }
+$('#replay').onclick = () => {
   ensureAudio();
   stopSpeaking();
-  rec = new Rec();
-  rec.lang = navigator.language || 'en-US';
-  rec.interimResults = true;
-  rec.continuous = false;
-  let finalText = '';
-  rec.onresult = (e) => {
-    let interim = '';
-    for (const r of e.results) (r.isFinal ? (finalText = r[0].transcript) : (interim = r[0].transcript));
-    $('#input').value = finalText || interim;
-  };
-  rec.onend = () => {
-    listening = false;
-    $('#mic').classList.remove('live');
-    if (finalText.trim()) ask(finalText.trim());
-    else setState('idle');
-  };
-  rec.start();
-  listening = true;
-  $('#mic').classList.add('live');
-  setState('listening');
-}
-$('#mic').onclick = () => (listening ? rec.stop() : listen());
+  const lines = lastSpoken;
+  lastSpoken = [];
+  lines.forEach(enqueueSpeech);
+};
 
-// ---------------- Conversation ----------------
+// ───────────────── Voice in ─────────────────
+// Browser speech recognition when available; otherwise record and transcribe with ElevenLabs Scribe.
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec;
+let recorder;
+let listening = false;
+
+function setListening(on) {
+  listening = on;
+  $('#mic').classList.toggle('live', on);
+  $('#talk').textContent = on ? '■ Stop' : '● Talk';
+  if (on) setState('listening');
+}
+
+async function listen() {
+  ensureAudio();
+  stopSpeaking();
+  showView('oracle');
+  if (Rec) {
+    rec = new Rec();
+    rec.lang = navigator.language || 'en-US';
+    rec.interimResults = true;
+    let finalText = '';
+    rec.onresult = (e) => {
+      let interim = '';
+      for (const r of e.results) (r.isFinal ? (finalText = r[0].transcript) : (interim = r[0].transcript));
+      $('#input').value = finalText || interim;
+    };
+    rec.onend = () => {
+      setListening(false);
+      if (finalText.trim()) ask(finalText.trim());
+      else setState('idle');
+    };
+    rec.start();
+    setListening(true);
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      setListening(false);
+      setState('thinking');
+      const fd = new FormData();
+      fd.append('audio', new Blob(chunks, { type: recorder.mimeType }), 'speech.webm');
+      try {
+        const { text } = await getJSON('/api/stt', { method: 'POST', body: fd });
+        if (text.trim()) ask(text.trim());
+        else setState('idle');
+      } catch (err) {
+        setState('idle');
+        alert(err.message);
+      }
+    };
+    recorder.start();
+    setListening(true);
+  } catch {
+    alert('Microphone unavailable.');
+  }
+}
+function stopListening() {
+  if (rec) rec.stop();
+  if (recorder?.state === 'recording') recorder.stop();
+}
+const toggleMic = () => (listening ? stopListening() : listen());
+$('#mic').onclick = toggleMic;
+$('#talk').onclick = toggleMic;
+
+// ───────────────── Conversation ─────────────────
 let busy = false;
 function addLog(role, text) {
-  const div = document.createElement('div');
-  div.className = `msg ${role}`;
-  div.textContent = text;
-  $('#log-body').append(div);
-  $('#log').scrollTop = 1e9;
-  return div;
+  const d = el('div', `msg ${role}`, text);
+  $('#log-body').append(d);
+  $('#log-body').scrollTop = 1e9;
+  return d;
 }
+$('#toggle-log').onclick = () => $('#log').classList.toggle('open');
+$('#close-log').onclick = () => $('#log').classList.remove('open');
 
 function showReflection(text) {
-  const p = document.createElement('p');
-  p.textContent = text;
+  const p = el('p', '', text);
   $('#reflections').append(p);
   setTimeout(() => p.remove(), 7000);
   while ($('#reflections').children.length > 3) $('#reflections').firstChild.remove();
 }
 
+const coverCache = new Map();
+function renderSources(list) {
+  const box = $('#sources');
+  box.innerHTML = '';
+  const seen = new Set();
+  for (const s of list) {
+    if (seen.has(s.title)) continue;
+    seen.add(s.title);
+    const chip = el('span');
+    chip.title = s.excerpt;
+    const cover = coverCache.get(s.docId);
+    if (cover) {
+      const img = el('img');
+      img.src = cover;
+      img.alt = '';
+      chip.append(img);
+    } else {
+      const sw = el('i', 'sw');
+      sw.style.background = gradientFor(s.title);
+      chip.append(sw);
+    }
+    chip.append(s.title);
+    box.append(chip);
+  }
+}
+
 async function ask(message) {
   if (busy || !message) return;
   busy = true;
+  showView('oracle');
   ensureAudio();
   stopSpeaking();
+  lastSpoken = [];
   $('#input').value = '';
   autoGrow();
   setState('thinking');
+  $('#hero').hidden = true;
+  $('#quick').hidden = true;
+  $('#answer').hidden = false;
   $('#sources').innerHTML = '';
-  const out = $('#utterance');
-  out.innerHTML = '';
-  const you = document.createElement('p');
-  you.className = 'you';
-  you.textContent = `“${message}”`;
-  const said = document.createElement('p');
-  out.append(you, said);
+  delete $('#mood-badge').dataset.mood;
+  $('#mood-badge').textContent = 'Contemplating';
+  $('#you').textContent = message;
+  const said = $('#said');
+  said.textContent = '';
+  said.classList.add('thinking');
+  $('#send').disabled = true;
   addLog('user', message);
   const logEntry = addLog('assistant', '');
 
@@ -207,8 +320,7 @@ async function ask(message) {
     if (!moodParsed) {
       const m = full.match(/^\s*\[mood:\s*([a-z]+)\s*\]\s*/i);
       if (m) {
-        currentMood = m[1].toLowerCase();
-        oracle.setMood(currentMood);
+        setMood(m[1].toLowerCase());
         moodParsed = true;
         chunk = full.slice(m[0].length);
       } else if (full.length < 40 && full.trimStart().startsWith('[')) {
@@ -222,18 +334,17 @@ async function ask(message) {
     shown += chunk;
     said.textContent = shown;
     logEntry.textContent = shown;
-    out.scrollTop = 1e9;
+    said.scrollTop = 1e9;
     sentenceBuf += chunk;
     // Voice each complete sentence (or paragraph) as soon as it lands.
     const parts = sentenceBuf.split(/(?<=[.!?…])\s+|\n{2,}/);
     sentenceBuf = parts.pop();
     const ready = parts.join(' ').trim();
-    if (ready.length) enqueueSpeech(ready);
+    if (ready) enqueueSpeech(ready);
   };
 
   try {
-    const res = await api('/api/chat', { method: 'POST', json: { message, lens: settings.lens } });
-    if (!res.ok) throw new Error((await res.json()).error);
+    const res = await api('/api/chat', { method: 'POST', json: { message, lens: settings.lens, web: settings.web } });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -253,16 +364,15 @@ async function ask(message) {
           const lines = reflectBuf.split(/(?<=[.!?])\s+/);
           reflectBuf = lines.pop();
           lines.filter((l) => l.length > 12).forEach(showReflection);
-        } else if (event === 'sources') {
-          const seen = new Set();
-          $('#sources').innerHTML = '';
-          for (const s of data) {
-            if (seen.has(s.title)) continue;
-            seen.add(s.title);
-            const tag = document.createElement('span');
-            tag.textContent = `📖 ${s.title}`;
-            tag.title = s.excerpt;
-            $('#sources').append(tag);
+        } else if (event === 'sources') renderSources(data);
+        else if (event === 'searching') showReflection('Searching beyond the library…');
+        else if (event === 'web') {
+          for (const w of data) {
+            const a = el('a', 'web', `⌁ ${w.title || new URL(w.url).hostname}`);
+            a.href = w.url;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            $('#sources').append(a);
           }
         } else if (event === 'error' || event === 'refusal') {
           said.textContent = data;
@@ -275,6 +385,8 @@ async function ask(message) {
     said.textContent = `The Oracle is silent: ${err.message}`;
   } finally {
     busy = false;
+    said.classList.remove('thinking');
+    $('#send').disabled = false;
     const finish = () => {
       setState('idle');
       if (settings.handsfree && settings.voice) setTimeout(listen, 400);
@@ -289,90 +401,140 @@ $('#ask').onsubmit = (e) => { e.preventDefault(); ask($('#input').value.trim());
 $('#input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask($('#input').value.trim()); }
 });
-function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 140)}px`; }
+function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }
 $('#input').addEventListener('input', autoGrow);
-document.querySelectorAll('[data-prompt]').forEach((b) => (b.onclick = () => ask(b.dataset.prompt)));
+$$('[data-prompt]').forEach((b) => (b.onclick = () => ask(b.dataset.prompt)));
 
-// ---------------- Panels ----------------
-function closePanels() {
-  document.querySelectorAll('.panel.open').forEach((p) => p.classList.remove('open'));
-  $('#veil').hidden = true;
-}
-function openPanel(id) {
-  const wasOpen = $(`#${id}`).classList.contains('open');
-  closePanels();
-  if (wasOpen) return;
-  $(`#${id}`).classList.add('open');
-  $('#veil').hidden = false;
-  if (id === 'library') refreshLibrary();
-  if (id === 'soul') refreshSoul();
-}
-document.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openPanel(b.dataset.open)));
-$('#toggle-log').onclick = () => openPanel('log');
-$('#veil').onclick = closePanels;
-addEventListener('keydown', (e) => e.key === 'Escape' && closePanels());
-
-// ---------------- Lenses ----------------
+// ───────────────── Status & integrations ─────────────────
+const INT_COLORS = { claude: '#d97757', websearch: '#7cc4ff', elevenlabs: '#f5f6f7', huggingface: '#ffd21e', gutenberg: '#c9a6ff', web: '#d4ff3a' };
+let lensesBuilt = false;
 async function loadStatus() {
+  let s;
   try {
-    const s = await (await api('/api/status')).json();
-    $('#lenses').innerHTML = '';
+    s = await getJSON('/api/status');
+  } catch (err) {
+    $('#eyebrow').innerHTML = '';
+    $('#eyebrow').append(el('i', 'dot'), ` ${err.message}`);
+    return;
+  }
+  elevenAvailable = s.elevenlabs;
+  $('#pill-mind').className = `pill status ${s.claude ? 'on' : 'off'}`;
+  $('#pill-voice').className = `pill status ${s.elevenlabs ? 'on' : ''}`;
+  $('#lib-count').textContent = s.library.works;
+  const eyebrow = !s.claude
+    ? 'Asleep — set ANTHROPIC_API_KEY on the server'
+    : s.library.works
+      ? `${s.library.works} works · ${s.library.passages.toLocaleString()} passages${s.library.semantic.ready ? ' · semantic memory on' : ''}`
+      : 'Awake — feed it books in Library or Discover';
+  $('#eyebrow').innerHTML = '';
+  $('#eyebrow').append(el('i', 'dot'), ` ${eyebrow}`);
+
+  if (!lensesBuilt) {
+    lensesBuilt = true;
     for (const l of s.lenses) {
-      const b = document.createElement('button');
-      b.textContent = l.name;
-      b.className = l.id === settings.lens ? 'on' : '';
+      const b = el('button', l.id === settings.lens ? 'on' : '', l.name.replace(/^The /, ''));
+      b.type = 'button';
       b.onclick = () => {
         settings.lens = l.id;
         persist();
-        $('#lens-name').textContent = l.name;
-        document.querySelectorAll('#lenses button').forEach((x) => x.classList.toggle('on', x === b));
+        $('#lens-tag').textContent = l.name;
+        $$('#lenses button').forEach((x) => x.classList.toggle('on', x === b));
       };
-      if (l.id === settings.lens) $('#lens-name').textContent = l.name;
+      if (l.id === settings.lens) $('#lens-tag').textContent = l.name;
       $('#lenses').append(b);
     }
-    elevenAvailable = s.elevenlabs;
-    $('#status').innerHTML = `Mind (Claude): ${s.claude ? '✓ connected' : '✗ set ANTHROPIC_API_KEY'}<br>Voice (ElevenLabs): ${s.elevenlabs ? '✓ connected' : '– using browser voice'}<br>Library: ${s.library.works} works, ${s.library.passages} passages`;
-    if (!s.claude) $('#utterance').innerHTML = '<p>I am not yet awake. Give me a key to the world — set <b>ANTHROPIC_API_KEY</b> on the server.</p>';
-    else if (!s.library.works) $('#utterance').innerHTML = '<p>I am here. Open the Library and give me the books that shaped you — then speak.</p>';
     if (s.elevenlabs) {
-      const voices = await (await api('/api/voices')).json();
+      const voices = await getJSON('/api/voices').catch(() => []);
       for (const v of voices) $('#voice-select').append(new Option(v.name, v.id, false, v.id === settings.voiceId));
     }
-  } catch (err) {
-    $('#status').textContent = err.message;
+  }
+
+  const grid = $('#int-grid');
+  grid.innerHTML = '';
+  for (const i of s.integrations) {
+    const c = el('div', 'card integration');
+    const top = el('div', 'top');
+    const mark = el('span', 'mark', i.name[0]);
+    mark.style.background = INT_COLORS[i.id] || 'var(--lime)';
+    top.append(mark, el('span', `state ${i.connected ? 'on' : 'off'}`, i.connected ? 'Connected' : 'Setup'));
+    c.append(top, el('b', '', i.name), el('small', '', i.role), el('div', 'detail', i.detail));
+    grid.append(c);
   }
 }
 
-// ---------------- Library ----------------
+// ───────────────── Library ─────────────────
+function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
+function gradientFor(title) {
+  const h = hash(title || '');
+  const a = h % 360;
+  return `radial-gradient(120% 90% at 20% 10%, hsl(${a} 85% 62%), transparent 60%), radial-gradient(100% 80% at 90% 90%, hsl(${(a + 70) % 360} 80% 45%), transparent 60%), #15171a`;
+}
+function bookCard({ title, author, cover, tag, meta }) {
+  const card = el('article', 'book');
+  const cv = el('div', 'cover');
+  const gen = () => {
+    cv.style.background = gradientFor(title);
+    const g = el('div', 'gen');
+    g.append(el('b', '', title), el('small', '', author || ''));
+    cv.append(g);
+  };
+  if (cover) {
+    const img = el('img');
+    img.src = cover;
+    img.alt = '';
+    img.loading = 'lazy';
+    img.onerror = () => { img.remove(); gen(); };
+    cv.append(img);
+  } else gen();
+  if (tag) { const t = el('span', 'badge tag', tag); card.append(t); }
+  const m = el('div', 'meta');
+  m.append(el('b', '', title), el('small', '', meta || author || ''));
+  card.append(cv, m);
+  return { card, meta: m };
+}
+
+let libraryDocs = [];
 async function refreshLibrary() {
-  const docs = await (await api('/api/library')).json();
-  $('#lib-stats').textContent = `${docs.length} works`;
-  $('#lib-list').innerHTML = '';
-  for (const d of docs.slice().reverse()) {
-    const li = document.createElement('li');
-    li.innerHTML = '<div><div class="t"></div><div class="m"></div></div><button title="Remove">✕</button>';
-    li.querySelector('.t').textContent = d.title;
-    li.querySelector('.m').textContent = `${d.author ? `${d.author} · ` : ''}${d.type} · ${d.words.toLocaleString()} words`;
-    li.querySelector('button').onclick = async () => {
+  try { libraryDocs = await getJSON('/api/library'); } catch { return; }
+  for (const d of libraryDocs) if (d.cover) coverCache.set(d.id, d.cover);
+  $('#lib-count').textContent = libraryDocs.length;
+  const words = libraryDocs.reduce((s, d) => s + d.words, 0);
+  $('#lib-stats').innerHTML = '';
+  const pill = (n, label) => { const p = el('span', 'pill'); p.append(el('b', '', n), ` ${label}`); return p; };
+  $('#lib-stats').append(pill(libraryDocs.length, 'works'), pill(words.toLocaleString(), 'words'));
+  const list = $('#lib-list');
+  list.innerHTML = '';
+  if (!libraryDocs.length) list.append(el('p', 'empty', 'Nothing here yet. Drop a book above, or open Discover for one-click classics.'));
+  for (const d of libraryDocs.slice().reverse()) {
+    const { card } = bookCard({ title: d.title, author: d.author, cover: d.cover, tag: d.type === 'book' ? null : d.type, meta: `${d.author ? `${d.author} · ` : ''}${d.words.toLocaleString()} words` });
+    const rm = el('button', 'remove', '✕');
+    rm.title = 'Remove from library';
+    rm.onclick = async () => {
       if (!confirm(`Remove “${d.title}” from the library?`)) return;
       await api(`/api/library/${d.id}`, { method: 'DELETE' });
       refreshLibrary();
     };
-    $('#lib-list').append(li);
+    card.append(rm);
+    list.append(card);
   }
+}
+
+function toast(id, msg, err = false) {
+  $(id).textContent = msg;
+  $(id).classList.toggle('err', err);
 }
 
 async function uploadFiles(files) {
   if (!files.length) return;
   const fd = new FormData();
   for (const f of files) fd.append('files', f);
-  $('#lib-status').textContent = `Absorbing ${files.length} work(s)… large books take a moment.`;
+  toast('#lib-status', `Absorbing ${files.length} work(s)… large books take a moment.`);
   setState('thinking');
   try {
-    const r = await (await api('/api/library/upload', { method: 'POST', body: fd })).json();
-    $('#lib-status').textContent = `Absorbed ${r.added.length}.${r.failed.length ? ` Could not read: ${r.failed.map((f) => `${f.name} (${f.error})`).join(', ')}` : ''}`;
+    const r = await getJSON('/api/library/upload', { method: 'POST', body: fd });
+    toast('#lib-status', `Absorbed ${r.added.length}.${r.failed.length ? ` Could not read: ${r.failed.map((f) => `${f.name} (${f.error})`).join(', ')}` : ''}`, r.failed.length > 0);
   } catch (err) {
-    $('#lib-status').textContent = err.message;
+    toast('#lib-status', err.message, true);
   }
   setState('idle');
   refreshLibrary();
@@ -387,13 +549,13 @@ $('#url-form').onsubmit = async (e) => {
   e.preventDefault();
   const url = $('#url').value.trim();
   if (!url) return;
-  $('#lib-status').textContent = 'Reaching out…';
+  toast('#lib-status', 'Reaching out…');
   try {
-    const d = await (await api('/api/library/url', { method: 'POST', json: { url } })).json();
-    $('#lib-status').textContent = `Absorbed “${d.title}”.`;
+    const d = await getJSON('/api/library/url', { method: 'POST', json: { url } });
+    toast('#lib-status', `Absorbed “${d.title}”.`);
     $('#url').value = '';
   } catch (err) {
-    $('#lib-status').textContent = err.message;
+    toast('#lib-status', err.message, true);
   }
   refreshLibrary();
 };
@@ -403,58 +565,112 @@ $('#text-form').onsubmit = async (e) => {
   try {
     await api('/api/library/text', { method: 'POST', json: { title: $('#text-title').value, author: $('#text-author').value, text: $('#text-body').value } });
     e.target.reset();
-    $('#lib-status').textContent = 'Absorbed.';
+    toast('#lib-status', 'Absorbed.');
   } catch (err) {
-    $('#lib-status').textContent = err.message;
+    toast('#lib-status', err.message, true);
   }
   refreshLibrary();
 };
 
-// ---------------- Soul ----------------
-async function refreshSoul() {
-  try {
-    const p = await (await api('/api/profile')).json();
-    const form = $('#soul-form');
-    for (const k of ['name', 'about', 'values', 'goals', 'struggles']) {
-      if (document.activeElement !== form[k]) form[k].value = p[k] || '';
-    }
-    $('#traits').innerHTML = '';
-    for (const [k, v] of Object.entries(p.traits || {})) {
-      const d = document.createElement('div');
-      d.innerHTML = '<b></b> — <span></span>';
-      d.querySelector('b').textContent = k;
-      d.querySelector('span').textContent = v;
-      $('#traits').append(d);
-    }
-    $('#insights').innerHTML = '';
-    for (const [i, s] of (p.insights || []).entries()) {
-      const li = document.createElement('li');
-      li.textContent = s;
-      li.title = 'Click to forget this';
-      li.style.cursor = 'pointer';
-      li.onclick = async () => {
-        if (!confirm('Have the Oracle forget this?')) return;
-        await api('/api/profile', { method: 'PUT', json: { insights: p.insights.filter((_, j) => j !== i) } });
-        refreshSoul();
+// ───────────────── Discover (Project Gutenberg) ─────────────────
+function renderGutenberg(books, { tagKey } = {}) {
+  const grid = $('#gut-grid');
+  grid.innerHTML = '';
+  if (!books.length) grid.append(el('p', 'empty', 'No books found. Try another name.'));
+  const owned = new Set(libraryDocs.map((d) => d.source));
+  for (const b of books) {
+    const { card, meta } = bookCard({ title: b.title, author: b.author, cover: b.cover, tag: tagKey ? b[tagKey] : null });
+    const act = el('div', 'act');
+    if (owned.has(`gutenberg:${b.id}`)) act.append(el('span', 'owned', '✓ In your library'));
+    else {
+      const btn = el('button', 'btn-lime', '+ Absorb');
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = 'Absorbing…';
+        try {
+          const d = await getJSON('/api/gutenberg/import', { method: 'POST', json: { id: b.id, title: b.title, author: b.author } });
+          libraryDocs.push(d);
+          act.innerHTML = '';
+          act.append(el('span', 'owned', `✓ ${d.words.toLocaleString()} words absorbed`));
+          toast('#gut-status', `“${d.title}” is now part of the Oracle.`);
+          loadStatus();
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = '+ Absorb';
+          toast('#gut-status', err.message, true);
+        }
       };
-      $('#insights').append(li);
+      act.append(btn);
     }
-  } catch { /* server offline */ }
+    meta.append(act);
+    grid.append(card);
+  }
+}
+async function loadClassics() {
+  if (!libraryDocs.length) await refreshLibrary();
+  try { renderGutenberg(await getJSON('/api/gutenberg/classics'), { tagKey: 'tradition' }); } catch (err) { toast('#gut-status', err.message, true); }
+}
+$('#gut-search').onsubmit = async (e) => {
+  e.preventDefault();
+  const q = $('#gut-q').value.trim();
+  if (!q) return loadClassics();
+  toast('#gut-status', 'Searching the archive…');
+  try {
+    renderGutenberg(await getJSON(`/api/gutenberg/search?q=${encodeURIComponent(q)}`));
+    toast('#gut-status', '');
+  } catch (err) {
+    toast('#gut-status', err.message, true);
+  }
+};
+
+// ───────────────── Soul ─────────────────
+async function refreshSoul() {
+  let p;
+  try { p = await getJSON('/api/profile'); } catch { return; }
+  const form = $('#soul-form');
+  for (const k of ['name', 'about', 'values', 'goals', 'struggles']) {
+    if (document.activeElement !== form[k]) form[k].value = p[k] || '';
+  }
+  const traits = $('#traits');
+  traits.innerHTML = '';
+  const entries = Object.entries(p.traits || {});
+  if (!entries.length) traits.append(el('p', 'empty', 'Talk with the Oracle and it will begin to read you.'));
+  for (const [k, v] of entries) {
+    const d = el('div');
+    d.append(el('span', '', k), el('p', '', v));
+    traits.append(d);
+  }
+  const ul = $('#insights');
+  ul.innerHTML = '';
+  if (!p.insights?.length) ul.append(el('li', 'empty', 'Nothing learned yet.'));
+  for (const [i, s] of (p.insights || []).entries()) {
+    const li = el('li', '', s);
+    li.onclick = async () => {
+      if (!confirm('Have the Oracle forget this?')) return;
+      await api('/api/profile', { method: 'PUT', json: { insights: p.insights.filter((_, j) => j !== i) } });
+      refreshSoul();
+    };
+    ul.append(li);
+  }
 }
 $('#soul-form').onsubmit = async (e) => {
   e.preventDefault();
-  const data = Object.fromEntries(new FormData(e.target));
-  await api('/api/profile', { method: 'PUT', json: data });
-  e.target.querySelector('button').textContent = 'Saved ✓';
-  setTimeout(() => (e.target.querySelector('button').textContent = 'Save'), 1500);
+  await api('/api/profile', { method: 'PUT', json: Object.fromEntries(new FormData(e.target)) });
+  const b = e.target.querySelector('button');
+  b.textContent = 'Saved ✓';
+  setTimeout(() => (b.textContent = 'Save'), 1500);
 };
 
-// ---------------- Settings ----------------
-$('#voice-on').checked = settings.voice;
-$('#handsfree').checked = settings.handsfree;
+// ───────────────── Settings ─────────────────
+const bindToggle = (id, key, after) => {
+  $(id).checked = settings[key];
+  $(id).onchange = (e) => { settings[key] = e.target.checked; persist(); after?.(e.target.checked); };
+};
+bindToggle('#voice-on', 'voice', (on) => !on && stopSpeaking());
+bindToggle('#web-on', 'web');
+bindToggle('#handsfree', 'handsfree');
+bindToggle('#ambience-on', 'ambience', (on) => { ensureAudio(); ambience.toggle(on); });
 $('#token').value = settings.token;
-$('#voice-on').onchange = (e) => { settings.voice = e.target.checked; if (!settings.voice) stopSpeaking(); persist(); };
-$('#handsfree').onchange = (e) => { settings.handsfree = e.target.checked; persist(); };
 $('#voice-select').onchange = (e) => { settings.voiceId = e.target.value; persist(); };
 $('#browser-voice').onchange = (e) => { settings.browserVoice = e.target.value; persist(); };
 $('#token').onchange = (e) => { settings.token = e.target.value; persist(); loadStatus(); };
@@ -469,12 +685,16 @@ $('#forget').onclick = async () => {
   await api('/api/history', { method: 'DELETE' });
   $('#log-body').innerHTML = '';
 };
+// Browsers only allow sound after a gesture; resume ambience on the first one.
+addEventListener('pointerdown', () => { if (settings.ambience) { ensureAudio(); ambience.toggle(true); } }, { once: true });
 
-// ---------------- Boot ----------------
+// ───────────────── Boot ─────────────────
 (async () => {
   await loadStatus();
+  refreshLibrary();
   try {
-    const hist = await (await api('/api/history')).json();
+    const hist = await getJSON('/api/history');
     for (const m of hist) addLog(m.role, m.content.replace(/^\s*\[mood:[^\]]*\]\s*/i, ''));
   } catch { /* empty */ }
+  setInterval(loadStatus, 15000);
 })();

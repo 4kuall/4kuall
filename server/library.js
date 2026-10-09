@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import AdmZip from 'adm-zip';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { load, save } from './store.js';
+import * as semantic from './semantic.js';
 
 const CHUNK_WORDS = 220;
 const CHUNK_OVERLAP = 40;
@@ -17,6 +18,12 @@ const STOPWORDS = new Set(
 
 let library = load('library', { docs: [], chunks: [] });
 let index = buildIndex(library.chunks);
+
+// Backfill semantic vectors for any works that don't have them yet.
+semantic.load(library.docs.map((d) => d.id));
+for (const d of library.docs) {
+  if (!semantic.has(d.id)) semantic.enqueue(d.id, library.chunks.filter((c) => c.docId === d.id).map((c) => c.text));
+}
 
 function tokenize(text) {
   return text
@@ -40,7 +47,7 @@ function buildIndex(chunks) {
   return { df, docs, avgLen, n: docs.length };
 }
 
-export function search(query, k = 8) {
+function bm25(query, k) {
   const terms = [...new Set(tokenize(query))];
   if (!terms.length || !index.n) return [];
   const k1 = 1.4;
@@ -57,12 +64,31 @@ export function search(query, k = 8) {
     }
     if (score > 0) scored.push({ i, score });
   });
-  scored.sort((a, b2) => b2.score - a.score);
+  return scored.sort((a, b2) => b2.score - a.score).slice(0, k);
+}
+
+/**
+ * Hybrid retrieval: keyword (BM25) and meaning (Hugging Face embeddings),
+ * merged with reciprocal-rank fusion so either signal can surface a passage.
+ */
+export async function search(query, k = 8) {
+  const fused = new Map(); // chunk index -> score
+  const add = (i, rank) => fused.set(i, (fused.get(i) || 0) + 1 / (60 + rank));
+  bm25(query, 40).forEach((h, rank) => add(h.i, rank));
+  const semHits = await semantic.search(query, 40);
+  if (semHits.length) {
+    const pos = new Map(library.chunks.map((c, i) => [`${c.docId}:${c.i}`, i]));
+    semHits.forEach((h, rank) => {
+      const i = pos.get(`${h.docId}:${h.i}`);
+      if (i !== undefined) add(i, rank);
+    });
+  }
+  const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]);
 
   // Keep variety: at most 3 passages from any single work.
   const perDoc = new Map();
   const out = [];
-  for (const { i, score } of scored) {
+  for (const [i, score] of ranked) {
     const chunk = library.chunks[i];
     const count = perDoc.get(chunk.docId) || 0;
     if (count >= 3) continue;
@@ -90,10 +116,14 @@ export function listDocs() {
 }
 
 export function stats() {
-  return { works: library.docs.length, passages: library.chunks.length };
+  return {
+    works: library.docs.length,
+    passages: library.chunks.length,
+    semantic: { ...semantic.state, indexedWorks: library.docs.filter((d) => semantic.has(d.id)).length },
+  };
 }
 
-export function addDocument({ title, author = '', source = '', type = 'text', text }) {
+export function addDocument({ title, author = '', source = '', type = 'text', text, cover = '' }) {
   const clean = (text || '').trim();
   if (clean.length < 40) throw new Error('Not enough readable text found in that source.');
   const id = crypto.randomUUID();
@@ -104,6 +134,7 @@ export function addDocument({ title, author = '', source = '', type = 'text', te
     author,
     source,
     type,
+    cover,
     words: clean.split(/\s+/).length,
     passages: pieces.length,
     addedAt: new Date().toISOString(),
@@ -112,10 +143,12 @@ export function addDocument({ title, author = '', source = '', type = 'text', te
   pieces.forEach((p, i) => library.chunks.push({ docId: id, i, text: p }));
   save('library', library);
   index = buildIndex(library.chunks);
+  semantic.enqueue(id, pieces);
   return doc;
 }
 
 export function removeDocument(id) {
+  semantic.remove(id);
   library.docs = library.docs.filter((d) => d.id !== id);
   library.chunks = library.chunks.filter((c) => c.docId !== id);
   save('library', library);
@@ -245,4 +278,62 @@ export async function extractFromUrl(url) {
     text: looksHtml ? stripHtml(article || raw) : raw,
     type: 'article',
   };
+}
+
+// ---------- Project Gutenberg (70,000+ free public-domain books) ----------
+
+const GUTENBERG = 'https://www.gutenberg.org';
+
+// Hand-checked IDs of classics of wisdom literature.
+export const CLASSICS = [
+  [2680, 'Meditations', 'Marcus Aurelius', 'Stoic'],
+  [45109, 'The Enchiridion', 'Epictetus', 'Stoic'],
+  [10661, 'Discourses (selection)', 'Epictetus', 'Stoic'],
+  [56075, "Seneca's Morals of a Happy Life", 'Seneca', 'Stoic'],
+  [216, 'Tao Te Ching', 'Laozi', 'Taoist'],
+  [2017, 'Dhammapada', 'The Buddha (attrib.)', 'Buddhist'],
+  [2388, 'Bhagavad Gita', 'trans. Edwin Arnold', 'Vedic'],
+  [3330, 'The Analects', 'Confucius', 'Confucian'],
+  [58585, 'The Prophet', 'Kahlil Gibran', 'Mystic'],
+  [1656, 'Apology', 'Plato', 'Philosophy'],
+  [1497, 'The Republic', 'Plato', 'Philosophy'],
+  [1998, 'Thus Spake Zarathustra', 'Friedrich Nietzsche', 'Philosophy'],
+  [2944, 'Essays — First Series', 'Ralph Waldo Emerson', 'Transcendental'],
+  [205, 'Walden', 'Henry David Thoreau', 'Transcendental'],
+  [4507, 'As a Man Thinketh', 'James Allen', 'Mindset'],
+  [132, 'The Art of War', 'Sun Tzu', 'Strategy'],
+].map(([id, title, author, tradition]) => ({ id, title, author, tradition, cover: gutenbergCover(id) }));
+
+export function gutenbergCover(id) {
+  return `${GUTENBERG}/cache/epub/${id}/pg${id}.cover.medium.jpg`;
+}
+
+export async function searchGutenberg(query) {
+  const html = await fetchText(`${GUTENBERG}/ebooks/search/?query=${encodeURIComponent(query)}`);
+  const out = [];
+  for (const m of html.matchAll(/<li class="booklink">([\s\S]*?)<\/li>/g)) {
+    const id = Number(m[1].match(/href="\/ebooks\/(\d+)"/)?.[1]);
+    const title = m[1].match(/<span class="title">([^<]+)/)?.[1];
+    const author = m[1].match(/<span class="subtitle">([^<]+)/)?.[1] || '';
+    if (id && title) out.push({ id, title: decodeEntities(title), author: decodeEntities(author), cover: gutenbergCover(id) });
+  }
+  return out.slice(0, 24);
+}
+
+function decodeEntities(s) {
+  return s.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
+}
+
+export async function importGutenberg(id, meta = {}) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) throw new Error('Invalid Gutenberg book id.');
+  if (library.docs.some((d) => d.source === `gutenberg:${n}`)) throw new Error('That book is already in your library.');
+  const raw = await fetchText(`${GUTENBERG}/cache/epub/${n}/pg${n}.txt`, 'text/plain');
+  const title = meta.title || raw.match(/^Title:\s*(.+)$/m)?.[1]?.trim() || `Gutenberg #${n}`;
+  const author = meta.author || raw.match(/^Author:\s*(.+)$/m)?.[1]?.trim() || '';
+  const start = raw.search(/\*\*\* ?START OF (THE|THIS) PROJECT GUTENBERG/i);
+  const end = raw.search(/\*\*\* ?END OF (THE|THIS) PROJECT GUTENBERG/i);
+  let body = raw.slice(start >= 0 ? raw.indexOf('\n', start) : 0, end > 0 ? end : undefined);
+  body = body.replace(/\r/g, '');
+  return addDocument({ title, author, text: body, type: 'book', source: `gutenberg:${n}`, cover: gutenbergCover(n) });
 }

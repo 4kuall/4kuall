@@ -82,7 +82,7 @@ function profileBlock() {
   return lines.length ? lines.join('\n') : 'You are only beginning to know this person. Learn who they are.';
 }
 
-function buildTurn(message, lensId, passages) {
+function buildTurn(message, lensId, passages, web) {
   const lens = LENSES[lensId] || LENSES.oracle;
   const lib = stats();
   const passageText = passages.length
@@ -98,7 +98,7 @@ ${profileBlock()}
 ${passageText}
 </library_passages>
 
-<their_words>
+${web ? '<web>You may search the web for current facts or sources beyond the library. Say plainly when something comes from the web rather than their library.</web>\n\n' : ''}<their_words>
 ${message}
 </their_words>`;
 }
@@ -114,33 +114,51 @@ function toMessages(turnContent) {
  * Streams the Oracle's answer. `emit(event, data)` sends SSE events:
  * sources, reflection (thinking summary), text, done, error.
  */
-export async function converse({ message, lens }, emit) {
+export async function converse({ message, lens, web }, emit) {
   const recentUser = history.filter((m) => m.role === 'user').slice(-1).map((m) => m.content).join(' ');
-  const passages = search(`${message} ${recentUser}`, 8);
+  const passages = await search(`${message} ${recentUser}`, 8);
   emit('sources', passages.map((p) => ({ title: p.title, author: p.author, docId: p.docId, excerpt: p.text.slice(0, 220) })));
 
-  const stream = anthropic().beta.messages.stream({
-    model: MODEL,
-    max_tokens: 16000,
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    thinking: { type: 'adaptive', display: 'summarized' },
-    output_config: { effort: process.env.ORACLE_EFFORT || 'medium' },
-    cache_control: { type: 'ephemeral' },
-    system: SYSTEM_PROMPT,
-    messages: toMessages(buildTurn(message, lens, passages)),
-  });
+  const messages = toMessages(buildTurn(message, lens, passages, web));
+  // Claude's server-side web search: the Oracle can look beyond the library when you allow it.
+  const tools = web ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }] : undefined;
 
   let text = '';
-  for await (const event of stream) {
-    if (event.type !== 'content_block_delta') continue;
-    if (event.delta.type === 'thinking_delta') emit('reflection', event.delta.thinking);
-    else if (event.delta.type === 'text_delta') {
-      text += event.delta.text;
-      emit('text', event.delta.text);
+  let final;
+  // A server tool can pause a long turn; continue it (bounded) by sending the partial turn back.
+  for (let round = 0; round < 3; round++) {
+    const stream = anthropic().beta.messages.stream({
+      model: MODEL,
+      max_tokens: 16000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort: process.env.ORACLE_EFFORT || 'medium' },
+      cache_control: { type: 'ephemeral' },
+      system: SYSTEM_PROMPT,
+      ...(tools && { tools }),
+      messages,
+    });
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_start' && event.content_block.type === 'server_tool_use') {
+        emit('searching', true);
+      } else if (event.type === 'content_block_start' && event.content_block.type === 'web_search_tool_result') {
+        const results = Array.isArray(event.content_block.content) ? event.content_block.content : [];
+        emit('web', results.slice(0, 5).map((r) => ({ title: r.title, url: r.url })));
+      } else if (event.type === 'content_block_delta') {
+        if (event.delta.type === 'thinking_delta') emit('reflection', event.delta.thinking);
+        else if (event.delta.type === 'text_delta') {
+          text += event.delta.text;
+          emit('text', event.delta.text);
+        }
+      }
     }
+    final = await stream.finalMessage();
+    if (final.stop_reason !== 'pause_turn') break;
+    messages.push({ role: 'assistant', content: final.content });
   }
-  const final = await stream.finalMessage();
+
   if (final.stop_reason === 'refusal') {
     emit('refusal', 'The Oracle cannot speak on this.');
     return;

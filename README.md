@@ -3,13 +3,26 @@
 A private wisdom companion that speaks to you in the combined voice of the authors you feed it. You upload your books, blogs, Reddit threads and notes. It listens to you by voice and answers in a warm, human cadence, grounded in your library. It learns your personality as you talk, and it appears as a living 3D being with a third eye that breathes, blinks, follows your cursor, thinks and speaks.
 
 ```
- you ──voice/text──▶  ┌────────────── server (Node) ──────────────┐
-                      │  Library ─ BM25 retrieval over your books   │
-                      │  Soul    ─ profile + learned insights       │──▶ Claude (mind)
-                      │  Memory  ─ conversation history             │──▶ ElevenLabs (voice)
-                      └─────────────────────────────────────────────┘
+ you ──voice/text──▶  ┌──────────────────── server (Node) ────────────────────┐
+                      │  Library ─ hybrid search: BM25 + Hugging Face vectors   │──▶ Claude (mind + web search)
+                      │  Soul    ─ profile + learned insights                   │──▶ ElevenLabs (voice + speech-to-text)
+                      │  Memory  ─ conversation history                         │──▶ Project Gutenberg (classics)
+                      └─────────────────────────────────────────────────────────┘
  3D Oracle (Three.js) ◀── streamed words · mood · inner reflections · audio amplitude
 ```
+
+## Integrations
+
+| Service | What it does here | Needs |
+| --- | --- | --- |
+| **Claude** | The mind: reasoning, persona, memory of who you are | `ANTHROPIC_API_KEY` |
+| **Claude web search** | Toggle **⌁ Web** and the Oracle can look beyond your library, linking what it found | same key |
+| **ElevenLabs** | Lifelike voice that shifts with mood. Scribe speech-to-text for browsers without built-in recognition (Firefox) | `ELEVENLABS_API_KEY` |
+| **Hugging Face** | `all-MiniLM-L6-v2` sentence embeddings, run **locally** via transformers.js, so passages are found by meaning, not just keywords | nothing (≈23 MB model download on first run) |
+| **Project Gutenberg** | **Discover** tab: 16 hand-picked wisdom classics, plus search across 70,000+ free public-domain books. One click to absorb | nothing |
+| **Blogs · Reddit · GitHub** | Paste any link into the Library | nothing |
+
+Each service's live status is shown on the **Integrations** tab.
 
 ## What it does
 
@@ -36,7 +49,7 @@ Everything is stored locally in `./data/` (library, profile, history). Nothing l
 
 ## Run it
 
-Requires Node 20+.
+Requires Node 20+. An `.npmrc` tells the ONNX runtime to skip downloading optional GPU binaries, because the CPU build it needs ships inside the npm package.
 
 ```bash
 cp .env.example .env      # add ANTHROPIC_API_KEY (and optionally ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID)
@@ -60,12 +73,12 @@ Open it in Chrome or Edge for voice input. Safari also works. Firefox has no spe
 
 - It is an AI. The prompt makes it sound like a wise elder, but it is told never to deny being an AI when someone sincerely asks.
 - Its wisdom is only as good as what you feed it, plus Claude's general knowledge. Treat it as a mirror and a counsellor, not an authority. For medical, legal or financial decisions it will point you to a qualified person. If you mention self-harm, it drops the mystique and points you to real help (in the US, call or text 988).
-- Retrieval is keyword-based (BM25). It's fast and has no extra dependencies, but it can miss passages that mean the same thing in different words. Semantic search with embeddings would fix that and is the natural next upgrade.
+- Semantic search is a small, fast model. It's good at finding passages with similar meaning, but it isn't deep understanding. Claude does the real reading of whatever passages search brings back.
 - Only upload books you own, and keep the server private. It's built as a personal library, not a public one.
 
 ## Ideas for going further
 
 - A photoreal talking face (a streaming avatar service, or a Ready Player Me / VRM head with lip-sync driven by the same audio analyser)
-- Embedding-based semantic search, and a citation view that jumps to the exact page
+- A citation view that jumps to the exact page
 - A daily morning teaching pushed to your phone
 - Journaling mode, where the Oracle reflects your recurring patterns back to you once a week

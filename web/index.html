@@ -3,9 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Oracle of the Third Eye</title>
+  <meta name="theme-color" content="#0b0c0e" />
+  <title>Oracle — Third Eye</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d4ff3a'/%3E%3Cpath d='M4 16c3.5-5.5 8-8 12-8s8.5 2.5 12 8c-3.5 5.5-8 8-12 8s-8.5-2.5-12-8z' fill='%230b0c0e'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23d4ff3a'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     {
@@ -16,102 +18,169 @@
     }
   </script>
 </head>
-<body>
+<body data-view="oracle">
   <canvas id="stage"></canvas>
+  <div class="grain" aria-hidden="true"></div>
 
-  <header class="top">
-    <button class="ghost" data-open="library" title="Library">☰ Library</button>
-    <div class="sigil">
-      <span class="sigil-eye">◉</span>
-      <span id="lens-name">The Oracle</span>
-      <span id="state-label" class="state-label">resting</span>
+  <!-- ───────── Top navigation ───────── -->
+  <nav class="nav">
+    <a class="brand" href="#" data-view-link="oracle">
+      <span class="logo"><svg viewBox="0 0 32 32"><path d="M4 16c3.5-5.5 8-8 12-8s8.5 2.5 12 8c-3.5 5.5-8 8-12 8s-8.5-2.5-12-8z"/><circle cx="16" cy="16" r="4"/></svg></span>
+      <span class="wordmark">ORACLE</span>
+    </a>
+    <div class="tabs" role="tablist">
+      <button data-view-link="oracle" class="on">Oracle</button>
+      <button data-view-link="library">Library <span class="count" id="lib-count">0</span></button>
+      <button data-view-link="discover">Discover <span class="badge">New</span></button>
+      <button data-view-link="soul">Soul</button>
+      <button data-view-link="integrations">Integrations</button>
     </div>
-    <div class="top-right">
-      <button class="ghost" data-open="soul" title="Your soul profile">✧ Soul</button>
-      <button class="ghost" data-open="settings" title="Settings">⚙</button>
+    <div class="nav-right">
+      <span class="pill status" id="pill-mind"><i></i>Mind</span>
+      <span class="pill status" id="pill-voice"><i></i>Voice</span>
+      <button class="btn-lime sm" id="talk">● Talk</button>
     </div>
-  </header>
+  </nav>
 
-  <!-- What the Oracle is contemplating (summarized reasoning) drifts here. -->
-  <div id="reflections" aria-hidden="true"></div>
+  <!-- ───────── Oracle view ───────── -->
+  <main class="view" id="view-oracle">
+    <div id="reflections" aria-hidden="true"></div>
 
-  <!-- The spoken words appear like subtitles. -->
-  <section id="utterance" aria-live="polite"></section>
-  <div id="sources"></div>
+    <section class="hero" id="hero">
+      <span class="eyebrow" id="eyebrow"><i class="dot"></i> Awakening…</span>
+      <h1>Ask the <em>Oracle</em></h1>
+      <p>Every book you give it becomes a voice. Speak, and it answers from all of them.</p>
+    </section>
 
-  <footer class="dock">
-    <div class="lenses" id="lenses"></div>
-    <form id="ask">
-      <button type="button" id="mic" class="mic" title="Speak (hold conversation)">🎙</button>
+    <section class="answer" id="answer" hidden>
+      <header>
+        <span class="mood" id="mood-badge">Listening</span>
+        <span class="lens-tag" id="lens-tag">The Oracle</span>
+        <span class="spacer"></span>
+        <button class="icon-btn" id="replay" title="Speak again">↻</button>
+        <button class="icon-btn" id="toggle-log" title="Transcript">☰</button>
+      </header>
+      <p class="you" id="you"></p>
+      <div class="said" id="said"></div>
+      <div class="sources" id="sources"></div>
+    </section>
+
+    <section class="quick" id="quick">
+      <button class="card action" data-prompt="Look at my life as you know it. What do you see that I cannot?">
+        <span class="ico">◉</span><b>Third-eye vision <span class="badge">New</span></b><small>What it sees that you can't</small>
+      </button>
+      <button class="card action" data-prompt="Give me one piece of wisdom for today, drawn from my library, and one small act to embody it.">
+        <span class="ico">☀</span><b>Today's teaching</b><small>One truth, one small act</small>
+      </button>
+      <button class="card action" data-prompt="I have a decision to make. Ask me what you need to know, one question at a time.">
+        <span class="ico">⚖</span><b>Help me decide <span class="badge hot">Top</span></b><small>Socratic, one question at a time</small>
+      </button>
+      <button class="card action" data-prompt="Convene the council: let three different authors from my library each speak briefly on what I'm facing right now, then give me your synthesis.">
+        <span class="ico">✦</span><b>Council of sages</b><small>Three minds, one synthesis</small>
+      </button>
+    </section>
+
+    <form class="composer" id="ask">
       <textarea id="input" rows="1" placeholder="Speak what is on your heart…" autocomplete="off"></textarea>
-      <button type="submit" class="send" title="Send">➤</button>
+      <div class="composer-row">
+        <div class="lenses" id="lenses"></div>
+        <span class="spacer"></span>
+        <label class="toggle-pill" title="Let the Oracle search the web"><input type="checkbox" id="web-on" /><span>⌁ Web</span></label>
+        <label class="toggle-pill" title="Speak replies aloud"><input type="checkbox" id="voice-on" /><span>♪ Voice</span></label>
+        <label class="toggle-pill" title="Ambient soundscape"><input type="checkbox" id="ambience-on" /><span>∿ Ambience</span></label>
+        <button type="button" id="mic" class="mic" title="Speak">🎙</button>
+        <button type="submit" class="btn-lime" id="send">Ask <span>↗</span></button>
+      </div>
     </form>
-    <div class="dock-actions">
-      <button type="button" class="chip" data-prompt="Look at my life as you know it. What do you see that I cannot?">👁 Third-eye vision</button>
-      <button type="button" class="chip" data-prompt="Give me one piece of wisdom for today, drawn from my library, and one small act to embody it.">☀ Today's teaching</button>
-      <button type="button" class="chip" data-prompt="I have a decision to make. Ask me what you need to know, one question at a time.">⚖ Help me decide</button>
-      <button type="button" class="chip" id="toggle-log">📜 Transcript</button>
+  </main>
+
+  <!-- ───────── Library ───────── -->
+  <section class="view sheet" id="view-library" hidden>
+    <div class="sheet-head">
+      <div><span class="kicker">Your library</span><h2>Feed the <em>Oracle</em></h2></div>
+      <div class="stats" id="lib-stats"></div>
     </div>
-  </footer>
+    <div class="ingest">
+      <label class="card drop" id="drop">
+        <input type="file" id="files" multiple accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm" hidden />
+        <span class="ico big">⇪</span>
+        <b>Drop books here</b>
+        <small>PDF · EPUB · TXT · MD · HTML — up to 50 at once</small>
+      </label>
+      <div class="card">
+        <b>Absorb a link</b><small>Blog post, Reddit thread, GitHub repo</small>
+        <form id="url-form" class="row"><input id="url" type="url" placeholder="https://…" /><button class="btn-lime sm">Absorb</button></form>
+        <details>
+          <summary>Paste a passage or note</summary>
+          <form id="text-form">
+            <input id="text-title" placeholder="Title" />
+            <input id="text-author" placeholder="Author (optional)" />
+            <textarea id="text-body" rows="4" placeholder="Words of wisdom…"></textarea>
+            <button class="btn-ghost">Absorb</button>
+          </form>
+        </details>
+      </div>
+    </div>
+    <div class="toast" id="lib-status"></div>
+    <div class="grid books" id="lib-list"></div>
+  </section>
 
-  <!-- Transcript -->
-  <aside id="log" class="panel right"><h2>Transcript</h2><div id="log-body"></div></aside>
+  <!-- ───────── Discover (Project Gutenberg) ───────── -->
+  <section class="view sheet" id="view-discover" hidden>
+    <div class="sheet-head">
+      <div><span class="kicker">Project Gutenberg · 70,000+ free classics</span><h2>Discover the <em>Ancients</em></h2></div>
+      <form id="gut-search" class="search"><input id="gut-q" placeholder="Search Seneca, Rumi, Emerson…" /><button class="btn-lime sm">Search</button></form>
+    </div>
+    <div class="toast" id="gut-status"></div>
+    <div class="grid books" id="gut-grid"></div>
+  </section>
 
-  <!-- Library -->
-  <aside id="library" class="panel left">
-    <h2>The Library <small id="lib-stats"></small></h2>
-    <p class="muted">Feed the Oracle. Books (PDF, EPUB, TXT, MD, HTML), blog posts, Reddit threads, GitHub repos — anything with words in it.</p>
-    <label class="drop" id="drop">
-      <input type="file" id="files" multiple accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm" hidden />
-      <span>Drop books here or tap to choose</span>
-    </label>
-    <form id="url-form" class="row">
-      <input id="url" type="url" placeholder="https://… blog, reddit, github" />
-      <button>Absorb</button>
-    </form>
-    <details>
-      <summary>Paste a passage or note</summary>
-      <form id="text-form">
-        <input id="text-title" placeholder="Title" />
-        <input id="text-author" placeholder="Author (optional)" />
-        <textarea id="text-body" rows="5" placeholder="Words of wisdom…"></textarea>
-        <button>Absorb</button>
+  <!-- ───────── Soul ───────── -->
+  <section class="view sheet" id="view-soul" hidden>
+    <div class="sheet-head">
+      <div><span class="kicker">Private · stored on your machine</span><h2>Your <em>Soul</em></h2></div>
+    </div>
+    <div class="two-col">
+      <form class="card form" id="soul-form">
+        <b>Tell it who you are</b><small>It also learns on its own as you talk.</small>
+        <label>Name<input name="name" /></label>
+        <label>Who you are<textarea name="about" rows="3" placeholder="Your story, work, relationships, season of life…"></textarea></label>
+        <label>What you value<textarea name="values" rows="2"></textarea></label>
+        <label>What you're reaching for<textarea name="goals" rows="2"></textarea></label>
+        <label>What weighs on you<textarea name="struggles" rows="2"></textarea></label>
+        <button class="btn-lime">Save</button>
       </form>
-    </details>
-    <div id="lib-status" class="muted"></div>
-    <ul id="lib-list"></ul>
-  </aside>
+      <div>
+        <div class="card"><b>Personality read</b><small>Inferred from your conversations</small><div class="traits" id="traits"></div></div>
+        <div class="card"><b>What the Oracle has learned</b><small>Click any insight to make it forget</small><ul class="insights" id="insights"></ul></div>
+      </div>
+    </div>
+  </section>
 
-  <!-- Soul profile -->
-  <aside id="soul" class="panel right">
-    <h2>Your Soul</h2>
-    <p class="muted">Tell the Oracle who you are. It also learns on its own as you talk.</p>
-    <form id="soul-form">
-      <label>Name<input name="name" /></label>
-      <label>Who you are<textarea name="about" rows="3" placeholder="Your story, work, relationships, season of life…"></textarea></label>
-      <label>What you value<textarea name="values" rows="2"></textarea></label>
-      <label>What you're reaching for<textarea name="goals" rows="2"></textarea></label>
-      <label>What weighs on you<textarea name="struggles" rows="2"></textarea></label>
-      <button>Save</button>
-    </form>
-    <h3>What the Oracle has learned</h3>
-    <div id="traits"></div>
-    <ul id="insights"></ul>
-  </aside>
+  <!-- ───────── Integrations & settings ───────── -->
+  <section class="view sheet" id="view-integrations" hidden>
+    <div class="sheet-head">
+      <div><span class="kicker">Connected services</span><h2>Integra<em>tions</em></h2></div>
+    </div>
+    <div class="grid integrations" id="int-grid"></div>
+    <div class="two-col">
+      <div class="card form">
+        <b>Voice</b><small>ElevenLabs when connected, otherwise your browser's voice</small>
+        <label>ElevenLabs voice<select id="voice-select"><option value="">Server default</option></select></label>
+        <label>Browser voice (fallback)<select id="browser-voice"></select></label>
+        <label class="check"><input type="checkbox" id="handsfree" /> Hands-free: listen again after the Oracle speaks</label>
+      </div>
+      <div class="card form">
+        <b>Access & memory</b><small>For when you host it beyond localhost</small>
+        <label>Access token<input id="token" type="password" placeholder="Matches ACCESS_TOKEN on the server" /></label>
+        <button class="btn-ghost danger" id="forget">Forget our conversation</button>
+      </div>
+    </div>
+  </section>
 
-  <!-- Settings -->
-  <aside id="settings" class="panel right">
-    <h2>Settings</h2>
-    <label class="toggle"><input type="checkbox" id="voice-on" checked /> Speak aloud</label>
-    <label class="toggle"><input type="checkbox" id="handsfree" /> Hands-free conversation (listen again after speaking)</label>
-    <label>ElevenLabs voice<select id="voice-select"><option value="">Server default</option></select></label>
-    <label>Browser voice (fallback)<select id="browser-voice"></select></label>
-    <label>Access token (if server requires one)<input id="token" type="password" /></label>
-    <div id="status" class="muted"></div>
-    <button id="forget" class="danger">Forget our conversation</button>
-  </aside>
+  <!-- Transcript drawer -->
+  <aside id="log" class="drawer"><div class="drawer-head"><b>Transcript</b><button class="icon-btn" id="close-log">✕</button></div><div id="log-body"></div></aside>
 
-  <div id="veil" hidden></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

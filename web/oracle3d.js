@@ -3,9 +3,25 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// Cinematic finish: chromatic fringe toward the edges, vignette, and lift.
+const LensShader = {
+  uniforms: { tDiffuse: { value: null }, uAmount: { value: 0.0009 }, uTime: { value: 0 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uAmount; uniform float uTime; varying vec2 vUv;
+    void main(){
+      vec2 c = vUv - 0.5; float d = dot(c, c);
+      vec2 off = c * d * uAmount * 40.0;
+      vec3 col = vec3(texture2D(tDiffuse, vUv + off).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - off).b);
+      col *= smoothstep(0.85, 0.15, d * 1.6);
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+};
 
 export const MOOD_COLORS = {
-  serene: ['#6fd3ff', '#8a7dff'],
+  serene: ['#d4ff3a', '#3a6bff'],
   compassionate: ['#ff9ec7', '#ffcf8a'],
   joyful: ['#ffe066', '#ff8a3d'],
   grave: ['#5b6cff', '#1c2a6b'],
@@ -71,6 +87,10 @@ export class Oracle3D {
     this.composer.addPass(new RenderPass(scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.1, 0.7, 0.12);
     this.composer.addPass(this.bloom);
+    this.lens = new ShaderPass(LensShader);
+    this.composer.addPass(this.lens);
+    this.focus = 1;
+    this.focusTarget = 1;
 
     addEventListener('resize', () => this.#resize());
     addEventListener('pointermove', (e) => {
@@ -91,6 +111,11 @@ export class Oracle3D {
     this.targetB.set(b);
   }
 
+  /** Recede into the background while a sheet (Library, Discover…) is open. */
+  setFocus(on) {
+    this.focusTarget = on ? 1 : 0;
+  }
+
   setEnergy(v) {
     this.targetEnergy = Math.max(0, Math.min(1, v));
   }
@@ -102,9 +127,10 @@ export class Oracle3D {
     this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     // Keep the being fully in frame on narrow screens.
-    this.camera.position.z = w / h < 0.8 ? 10.5 : 7.6;
+    this.baseZ = w / h < 0.8 ? 11.8 : 8.4;
+    this.camera.position.z = this.baseZ;
     // Lift the being above the subtitles.
-    this.camera.position.y = w / h < 0.8 ? -1.6 : -0.9;
+    this.camera.position.y = w / h < 0.8 ? -2.0 : -1.05;
     this.camera.updateProjectionMatrix();
   }
 
@@ -120,7 +146,7 @@ export class Oracle3D {
           float n=snoise(vec3(p*2.2,uTime*0.03))*0.5+0.5;
           float n2=snoise(vec3(p*5.0+7.0,uTime*0.05))*0.5+0.5;
           float v=1.0-smoothstep(0.0,0.85,length(p));
-          vec3 col=mix(vec3(0.005,0.004,0.02),mix(uA,uB,n2)*0.16,n*v);
+          vec3 col=mix(vec3(0.043,0.047,0.055)*0.6,mix(uA,uB,n2)*0.07,n*v*0.8);
           gl_FragColor=vec4(col,1.0);
         }`,
     });
@@ -168,6 +194,23 @@ export class Oracle3D {
     this.core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.35, 96), mat);
     this.scene.add(this.core);
 
+    // Soft outer aura.
+    const auraTex = (() => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 256;
+      const g = c.getContext('2d');
+      const grd = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+      grd.addColorStop(0, 'rgba(255,255,255,0.55)');
+      grd.addColorStop(0.35, 'rgba(255,255,255,0.12)');
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, 256, 256);
+      return new THREE.CanvasTexture(c);
+    })();
+    this.aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: auraTex, color: this.colorB, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5 }));
+    this.aura.scale.setScalar(6.5);
+    this.scene.add(this.aura);
+
     // Inner luminous seed.
     this.seed = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 48, 48),
@@ -187,7 +230,7 @@ export class Oracle3D {
     almond.quadraticCurveTo(0, -0.5, -0.62, 0);
     this.sclera = new THREE.Mesh(
       new THREE.ShapeGeometry(almond, 48),
-      new THREE.MeshBasicMaterial({ color: 0xfff1d6, transparent: true, opacity: 0.75 }),
+      new THREE.MeshBasicMaterial({ color: 0xfff1d6, transparent: true, opacity: 0.6 }),
     );
     eye.add(this.sclera);
 
@@ -354,7 +397,12 @@ export class Oracle3D {
 
     const pull = s === 'thinking' ? 1 : s === 'speaking' ? 0.3 + this.energy : 0;
     this.dustUniforms.uPull.value += (pull - this.dustUniforms.uPull.value) * dt * 2;
-    this.bloom.strength = 0.7 + this.energy * 0.9 + think * 0.4;
+    this.focus += (this.focusTarget - this.focus) * Math.min(1, dt * 3);
+    this.bloom.strength = (0.7 + this.energy * 0.9 + think * 0.4) * (0.35 + this.focus * 0.65);
+    this.aura.material.opacity = (0.35 + this.energy * 0.4 + think * 0.2) * (0.3 + this.focus * 0.7);
+    this.aura.scale.setScalar(6 + Math.sin(t * 0.6) * 0.3 + this.energy * 1.5);
+    this.lens.uniforms.uTime.value = t;
+    this.camera.position.z = this.baseZ + (1 - this.focus) * 4;
 
     this.composer.render();
   }

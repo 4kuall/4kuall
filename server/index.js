@@ -18,10 +18,21 @@ app.use('/api', (req, res, next) => {
 });
 
 app.get('/api/status', (_req, res) => {
+  const lib = library.stats();
+  const claude = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  const eleven = Boolean(process.env.ELEVENLABS_API_KEY);
   res.json({
-    claude: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
-    elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
-    library: library.stats(),
+    claude,
+    elevenlabs: eleven,
+    library: lib,
+    integrations: [
+      { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? process.env.ORACLE_MODEL || 'claude-opus-5-5' : 'Set ANTHROPIC_API_KEY' },
+      { id: 'websearch', name: 'Web Search', role: 'Live knowledge beyond your library', connected: claude, detail: 'Toggle "Web" in the composer' },
+      { id: 'elevenlabs', name: 'ElevenLabs', role: 'Voice out · speech-to-text in', connected: eleven, detail: eleven ? 'Voice + Scribe STT' : 'Set ELEVENLABS_API_KEY (browser voice used meanwhile)' },
+      { id: 'huggingface', name: 'Hugging Face', role: 'Semantic search (local embeddings)', connected: lib.semantic.enabled && lib.semantic.ready, detail: lib.semantic.error || (lib.semantic.ready ? `${lib.semantic.indexedWorks}/${lib.works} works indexed${lib.semantic.pending ? ` · ${lib.semantic.pending} passages queued` : ''}` : 'Loads on first use') },
+      { id: 'gutenberg', name: 'Project Gutenberg', role: '70,000+ free classics, one click', connected: true, detail: 'Open Discover' },
+      { id: 'web', name: 'Blogs · Reddit · GitHub', role: 'Absorb any link', connected: true, detail: 'Paste a URL in the Library' },
+    ],
     lenses: Object.entries(oracle.LENSES).map(([id, l]) => ({ id, name: l.name })),
   });
 });
@@ -61,6 +72,22 @@ app.post('/api/library/text', (req, res) => {
   }
 });
 
+app.get('/api/gutenberg/classics', (_req, res) => res.json(library.CLASSICS));
+app.get('/api/gutenberg/search', async (req, res) => {
+  try {
+    res.json(await library.searchGutenberg(String(req.query.q || '')));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+app.post('/api/gutenberg/import', async (req, res) => {
+  try {
+    res.json(await library.importGutenberg(req.body.id, { title: req.body.title, author: req.body.author }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.delete('/api/library/:id', (req, res) => {
   library.removeDocument(req.params.id);
   res.json({ ok: true });
@@ -86,7 +113,7 @@ app.post('/api/chat', async (req, res) => {
   });
   const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   try {
-    await oracle.converse({ message, lens: req.body.lens }, emit);
+    await oracle.converse({ message, lens: req.body.lens, web: Boolean(req.body.web) }, emit);
   } catch (err) {
     console.error('[chat]', err);
     emit('error', err.status === 401 || /authentication/i.test(err.message) ? 'The Oracle has no key to the world yet — set ANTHROPIC_API_KEY.' : err.message);
@@ -124,6 +151,20 @@ app.post('/api/tts', async (req, res) => {
   if (!r.ok) return res.status(r.status).json({ error: await r.text() });
   res.setHeader('Content-Type', 'audio/mpeg');
   res.send(Buffer.from(await r.arrayBuffer()));
+});
+
+// Speech-to-text fallback (ElevenLabs Scribe) for browsers without built-in recognition.
+app.post('/api/stt', upload.single('audio'), async (req, res) => {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) return res.status(501).json({ error: 'Voice input needs Chrome/Edge/Safari, or set ELEVENLABS_API_KEY.' });
+  if (!req.file) return res.status(400).json({ error: 'No audio received.' });
+  const fd = new FormData();
+  fd.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
+  fd.append('file', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' }), 'speech.webm');
+  const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', { method: 'POST', headers: { 'xi-api-key': key }, body: fd });
+  if (!r.ok) return res.status(r.status).json({ error: await r.text() });
+  const data = await r.json();
+  res.json({ text: data.text || '' });
 });
 
 app.get('/api/voices', async (_req, res) => {
