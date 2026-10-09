@@ -110,6 +110,13 @@ function chunkText(text) {
   return chunks;
 }
 
+/** A short spoken-friendly description of the library for the live voice agent. */
+export function overview() {
+  if (!library.docs.length) return 'Their library is still empty; draw on broadly known wisdom traditions and say so.';
+  const list = library.docs.slice(-60).map((d) => `${d.title}${d.author ? ` by ${d.author}` : ''}`).join('; ');
+  return `${library.docs.length} works, including: ${list}. Use consult_library to read from them.`;
+}
+
 export function listDocs() {
   return library.docs;
 }

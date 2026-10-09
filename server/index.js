@@ -28,7 +28,9 @@ app.use('/api', (req, res, next) => {
     if (process.env.REQUIRE_ACCESS_TOKEN === 'true') return res.status(503).json({ error: 'Set ACCESS_TOKEN on the server to unlock the Oracle.', locked: true });
     return next();
   }
-  if (crypto.timingSafeEqual(sha(req.get('x-access-token') || ''), sha(secret))) return next();
+    // Header normally; ?t= only for the transcript beacon sent as the page closes (beacons can't set headers).
+  const given = req.get('x-access-token') || (req.path === '/live/transcript' ? req.query.t : '') || '';
+  if (crypto.timingSafeEqual(sha(given), sha(secret))) return next();
   res.status(401).json({ error: 'Passcode required.', locked: true });
 });
 
@@ -40,10 +42,12 @@ app.get('/api/status', (_req, res) => {
     claude,
     elevenlabs: eleven,
     storage: store.mode,
+    live: Boolean(process.env.ELEVENLABS_API_KEY && AGENT_ID),
     library: lib,
     integrations: [
       { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? process.env.ORACLE_MODEL || 'claude-opus-5-5' : 'Set ANTHROPIC_API_KEY' },
       { id: 'websearch', name: 'Web Search', role: 'Live knowledge beyond your library', connected: claude, detail: 'Automatic — the Oracle searches only when it needs to' },
+      { id: 'live', name: 'Live conversation', role: 'Real-time voice · Eleven v4 Turbo · interruptible', connected: eleven && Boolean(AGENT_ID), detail: eleven && AGENT_ID ? 'Tap "Go live" to talk' : 'Set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID' },
       { id: 'elevenlabs', name: 'ElevenLabs', role: 'Voice out · speech-to-text in', connected: eleven, detail: eleven ? 'Voice + Scribe STT' : 'Set ELEVENLABS_API_KEY (browser voice used meanwhile)' },
       { id: 'huggingface', name: 'Hugging Face', role: 'Semantic search (local embeddings)', connected: lib.semantic.enabled && lib.semantic.ready, detail: lib.semantic.error || (lib.semantic.ready ? `${lib.semantic.indexedWorks}/${lib.works} works indexed${lib.semantic.pending ? ` · ${lib.semantic.pending} passages queued` : ''}` : 'Loads on first use') },
       { id: 'supabase', name: 'Supabase', role: 'Cloud memory: library, soul & history on every device', connected: store.mode === 'supabase', detail: store.mode === 'supabase' ? 'Connected via DATABASE_URL' : 'Local files — set DATABASE_URL to sync' },
@@ -139,6 +143,45 @@ app.post('/api/chat', async (req, res) => {
     emit('error', err.status === 401 || /authentication/i.test(err.message) ? 'The Oracle has no key to the world yet — set ANTHROPIC_API_KEY.' : err.message);
   }
   res.end();
+});
+
+// ---------- Live conversation (ElevenLabs Agents, WebRTC) ----------
+// The agent itself lives in ElevenLabs; this server mints short-lived WebRTC tokens
+// for it (keeping the API key secret), feeds it who you are, and answers its
+// "consult_library" tool with passages from your library.
+const AGENT_ID = process.env.ELEVENLABS_AGENT_ID || '';
+
+app.get('/api/live/start', async (_req, res) => {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key || !AGENT_ID) return res.status(501).json({ error: 'Live conversation needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID on the server.' });
+  const r = await fetch(`https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${encodeURIComponent(AGENT_ID)}`, {
+    headers: { 'xi-api-key': key },
+  });
+  if (!r.ok) return res.status(502).json({ error: `ElevenLabs refused the session (${r.status}): ${(await r.text()).slice(0, 200)}` });
+  const { token } = await r.json();
+  const p = oracle.getProfile();
+  res.json({
+    conversationToken: token,
+    dynamicVariables: {
+      greeting: p.name ? `${p.name}. I'm here. What's on your heart?` : "I'm here. What's on your heart?",
+      profile: oracle.profileBlock().slice(0, 6000),
+      library_overview: library.overview().slice(0, 3000),
+    },
+  });
+});
+
+app.post('/api/live/library', async (req, res) => {
+  const passages = await library.search(String(req.body.query || ''), 5);
+  if (!passages.length) return res.json({ result: 'No closely matching passages in their library. Draw on broadly known wisdom and say so.' });
+  res.json({
+    result: passages.map((p, i) => `[${i + 1}] ${p.title}${p.author ? ` — ${p.author}` : ''}\n${p.text}`).join('\n\n'),
+    sources: passages.map((p) => ({ title: p.title, author: p.author, docId: p.docId, excerpt: p.text.slice(0, 220) })),
+  });
+});
+
+app.post('/api/live/transcript', async (req, res) => {
+  const turns = Array.isArray(req.body.turns) ? req.body.turns.slice(0, 400) : [];
+  res.json({ saved: await oracle.recordLive(turns) });
 });
 
 // ---------- Voice (ElevenLabs) ----------

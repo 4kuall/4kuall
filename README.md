@@ -11,6 +11,17 @@ A private wisdom companion that speaks to you in the combined voice of the autho
  3D Oracle (Three.js) ◀── streamed words · mood · inner reflections · audio amplitude
 ```
 
+## Live conversation (ElevenLabs Agents)
+
+Tap **● Go live** and just talk. It's a real-time, two-way voice conversation over WebRTC, like a phone call. You can interrupt it mid-sentence, and the orb moves with both voices.
+
+- **Voice:** `eleven_v4_turbo`, ElevenLabs' newest real-time model, using "Bill – Wise, Mature, Balanced".
+- **Brain:** Claude Sonnet 5.5 at low reasoning effort, running inside the ElevenLabs agent. It's a fast model, chosen because a spoken reply has to start within about a second. You can switch it to Claude Opus 5.5 in the ElevenLabs dashboard (Agents → Oracle of the Third Eye → LLM) if you'd trade speed for depth.
+- **It knows you:** your Soul profile and library list are passed in when each call starts. A `consult_library` tool lets it read passages from your library mid-conversation.
+- **It remembers:** the transcript is saved to your history when the call ends, and the Oracle keeps learning from it, the same as typed chats.
+- **The agent is already set up** in your ElevenLabs account as **Oracle of the Third Eye** (`agent_4301m4gaggbzf5et5ma61brmra58`). It's private, so only your server can start a call, and it's capped at 2 simultaneous calls and 100 a day to protect your credits. Change any of this in the ElevenLabs dashboard.
+- **Needs:** `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` on the server. Without them, the mic button falls back to the older speak-then-wait mode.
+
 ## Integrations
 
 | Service | What it does here | Needs |
@@ -18,6 +29,7 @@ A private wisdom companion that speaks to you in the combined voice of the autho
 | **Claude** | The mind: reasoning, persona, memory of who you are | `ANTHROPIC_API_KEY` |
 | **Claude web search** | Automatic. The Oracle searches only when it needs current facts, and links what it found | same key |
 | **Supabase** | Cloud memory, so your library, soul profile and history are the same on your phone and laptop. Tables are created automatically | `DATABASE_URL` |
+| **ElevenLabs Agents** | Live real-time conversation (see above) | `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` |
 | **ElevenLabs** | Lifelike voice that shifts with mood. Scribe speech-to-text for browsers without built-in recognition (Firefox) | `ELEVENLABS_API_KEY` |
 | **Hugging Face** | `all-MiniLM-L6-v2` sentence embeddings, run **locally** via transformers.js, so passages are found by meaning, not just keywords | nothing (≈23 MB model download on first run) |
 | **Project Gutenberg** | **Discover** tab: 16 hand-picked wisdom classics, plus search across 70,000+ free public-domain books. One click to absorb | nothing |

@@ -24,4 +24,6 @@ services:
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID
-        value: zfWx5IjUaWGWTId9hv9t
+        value: pqHfZKP75CvOlQylNhV4
+      - key: ELEVENLABS_AGENT_ID # live conversation agent in your ElevenLabs account
+        value: agent_4301m4gaggbzf5et5ma61brmra58

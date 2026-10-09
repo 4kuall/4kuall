@@ -361,7 +361,7 @@ export class Oracle3D {
     const breath = 1 + Math.sin(t * 0.9) * 0.02 + this.energy * 0.06;
     this.core.scale.setScalar(breath);
     this.seed.scale.setScalar(1 + Math.sin(t * 2.2) * 0.1 + this.energy * 0.8);
-    this.seed.material.opacity = 0.25 + this.energy * 0.5 + think * 0.2;
+    this.seed.material.opacity = 0.25 + this.energy * 0.25 + think * 0.2;
 
     // Gaze follows you, drifts while thinking.
     const gx = s === 'thinking' ? Math.sin(t * 0.7) * 0.25 : this.pointer.x * 0.35;
@@ -398,8 +398,8 @@ export class Oracle3D {
     const pull = s === 'thinking' ? 1 : s === 'speaking' ? 0.3 + this.energy : 0;
     this.dustUniforms.uPull.value += (pull - this.dustUniforms.uPull.value) * dt * 2;
     this.focus += (this.focusTarget - this.focus) * Math.min(1, dt * 3);
-    this.bloom.strength = (0.7 + this.energy * 0.9 + think * 0.4) * (0.35 + this.focus * 0.65);
-    this.aura.material.opacity = (0.35 + this.energy * 0.4 + think * 0.2) * (0.3 + this.focus * 0.7);
+    this.bloom.strength = (0.7 + this.energy * 0.45 + think * 0.4) * (0.35 + this.focus * 0.65);
+    this.aura.material.opacity = (0.35 + this.energy * 0.2 + think * 0.2) * (0.3 + this.focus * 0.7);
     this.aura.scale.setScalar(6 + Math.sin(t * 0.6) * 0.3 + this.energy * 1.5);
     this.lens.uniforms.uTime.value = t;
     this.camera.position.z = this.baseZ + (1 - this.focus) * 4;

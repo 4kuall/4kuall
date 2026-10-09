@@ -65,7 +65,7 @@ Care
 
 Latency-sensitive; begin your visible answer immediately.`;
 
-function profileBlock() {
+export function profileBlock() {
   const p = profile;
   const lines = [];
   if (p.name) lines.push(`Name: ${p.name}`);
@@ -164,6 +164,30 @@ export async function converse({ message }, emit) {
   emit('done', { stop_reason: final.stop_reason });
 
   learn(message, text).catch((err) => console.warn('[memory] update failed:', err.message));
+}
+
+/**
+ * Live voice conversations (ElevenLabs) happen outside this server; the browser
+ * posts the finished transcript here so it joins the history and the Oracle
+ * keeps learning who the person is.
+ */
+export async function recordLive(turns) {
+  const clean = turns
+    .filter((t) => (t.role === 'user' || t.role === 'assistant') && typeof t.text === 'string' && t.text.trim())
+    .map((t) => ({ role: t.role, content: t.text.trim().slice(0, 4000), at: Date.now(), live: true }));
+  if (!clean.length) return 0;
+  // Keep the stored history alternating user/assistant so it can be replayed to Claude.
+  for (const t of clean) {
+    const last = history[history.length - 1];
+    if (last && last.role === t.role) last.content += `\n${t.content}`;
+    else history.push(t);
+  }
+  if (history.length > 400) history = history.slice(-400);
+  save('history', history);
+  const said = clean.filter((t) => t.role === 'user').map((t) => t.content).join('\n');
+  const replied = clean.filter((t) => t.role === 'assistant').map((t) => t.content).join('\n');
+  if (said) learn(`(spoken conversation)\n${said}`, replied).catch((err) => console.warn('[memory] live update failed:', err.message));
+  return clean.length;
 }
 
 // After each exchange, quietly update what the Oracle knows about the person.

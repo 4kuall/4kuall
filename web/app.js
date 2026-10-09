@@ -268,9 +268,123 @@ function stopListening() {
   if (rec) rec.stop();
   if (recorder?.state === 'recording') recorder.stop();
 }
-const toggleMic = () => (listening ? stopListening() : listen());
+const toggleMic = () => {
+  // Live conversation (ElevenLabs) is the primary way to talk when it's set up.
+  if (liveAvailable || live) return live ? endLive() : startLive();
+  return listening ? stopListening() : listen();
+};
 $('#mic').onclick = toggleMic;
 $('#talk').onclick = toggleMic;
+
+// ───────────────── Live conversation (ElevenLabs Agents, WebRTC) ─────────────────
+// Full-duplex: you talk, it answers in real time, and you can interrupt it.
+// Eleven v4 Turbo voice; the brain is Claude inside the ElevenLabs agent, fed with
+// your Soul profile and reading your library through the consult_library tool.
+const ELEVEN_CLIENT = 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@1.26.0/+esm';
+let liveAvailable = false;
+let live = null;
+let liveTurns = [];
+let liveRaf = 0;
+
+function setLiveUI(on, label) {
+  document.body.classList.toggle('is-live', on);
+  $('#mic').classList.toggle('live', on);
+  $('#talk').textContent = on ? '■ End' : '● Go live';
+  $('#hint').textContent = label || (on ? 'Live — just talk. Interrupt any time.' : 'It reads what you need. Just speak.');
+}
+
+async function startLive() {
+  if (live) return;
+  ensureAudio();
+  stopSpeaking();
+  showView('oracle');
+  setLiveUI(true, 'Connecting…');
+  setState('thinking');
+  try {
+    // Ask for the mic first so the browser prompt appears right away (and works on iPhone).
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mic.getTracks().forEach((t) => t.stop());
+    const [{ Conversation }, session] = await Promise.all([import(ELEVEN_CLIENT), getJSON('/api/live/start')]);
+    liveTurns = [];
+    $('#hero').hidden = true;
+    $('#answer').hidden = false;
+    delete $('#mood-badge').dataset.mood;
+    live = await Conversation.startSession({
+      conversationToken: session.conversationToken,
+      connectionType: 'webrtc',
+      dynamicVariables: session.dynamicVariables,
+      clientTools: {
+        consult_library: async ({ query }) => {
+          showReflection(`Consulting the library: ${query}`);
+          try {
+            const r = await getJSON('/api/live/library', { method: 'POST', json: { query } });
+            if (r.sources) renderSources(r.sources);
+            return r.result;
+          } catch (err) {
+            return `The library could not be reached (${err.message}).`;
+          }
+        },
+      },
+      onConnect: () => { setLiveUI(true); setState('listening'); },
+      onModeChange: ({ mode }) => setState(mode === 'speaking' ? 'speaking' : 'listening'),
+      onMessage: ({ message, role, event_id: eventId, response_id: responseId }) => {
+        const r = role === 'agent' ? 'assistant' : 'user';
+        // Streamed parts/resends share an id: update that turn instead of adding a duplicate.
+        const key = `${r}:${responseId ?? eventId}`;
+        const existing = liveTurns.find((t) => t.key === key);
+        if (existing) {
+          existing.text = message;
+          existing.el.textContent = message;
+        } else {
+          liveTurns.push({ key, role: r, text: message, el: addLog(r, message) });
+        }
+        if (r === 'user') { $('#you').textContent = message; $('#said').textContent = ''; $('#sources').innerHTML = ''; }
+        else $('#said').textContent = message;
+      },
+      onError: (message) => showReflection(`Live error: ${message}`),
+      onDisconnect: () => finishLive(),
+    });
+    // Drive the orb from the real voices: the Oracle's when it speaks, yours when it listens.
+    const tick = () => {
+      if (!live) return;
+      const v = oracle.state === 'speaking' ? live.getOutputVolume() : live.getInputVolume() * 0.5;
+      oracle.setEnergy(Math.min(1, v * 0.75));
+      liveRaf = requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (err) {
+    live = null;
+    setLiveUI(false);
+    setState('idle');
+    $('#answer').hidden = false;
+    $('#said').textContent = err.name === 'NotAllowedError' ? 'The Oracle needs your microphone to talk live. Allow it in your browser settings.' : `Couldn't go live: ${err.message}`;
+  }
+}
+
+async function endLive() {
+  if (!live) return;
+  const session = live;
+  await session.endSession().catch(() => {});
+  finishLive();
+}
+
+function finishLive() {
+  if (!live && !liveTurns.length) return;
+  live = null;
+  cancelAnimationFrame(liveRaf);
+  oracle.setEnergy(0);
+  setLiveUI(false);
+  setState('idle');
+  const turns = liveTurns.map(({ role, text }) => ({ role, text }));
+  liveTurns = [];
+  if (turns.length) api('/api/live/transcript', { method: 'POST', json: { turns } }).then(() => setTimeout(refreshSoul, 4000)).catch(() => {});
+}
+// Closing the tab mid-conversation still saves what was said.
+addEventListener('pagehide', () => {
+  if (!liveTurns.length) return;
+  const turns = liveTurns.map(({ role, text }) => ({ role, text }));
+  navigator.sendBeacon?.(`/api/live/transcript?t=${encodeURIComponent(settings.token || '')}`, new Blob([JSON.stringify({ turns })], { type: 'application/json' }));
+});
 
 // ───────────────── Conversation ─────────────────
 let busy = false;
@@ -317,6 +431,13 @@ function renderSources(list) {
 }
 
 async function ask(message) {
+  if (live && message) {
+    // Typing while live: the agent hears it as if you'd said it.
+    live.sendUserMessage(message);
+    $('#input').value = '';
+    autoGrow();
+    return;
+  }
   if (busy || !message) return;
   busy = true;
   showView('oracle');
@@ -447,6 +568,8 @@ async function loadStatus() {
     return;
   }
   elevenAvailable = s.elevenlabs;
+  liveAvailable = Boolean(s.live);
+  if (!live) $('#talk').textContent = liveAvailable ? '● Go live' : '● Talk';
   $('#pill-mind').className = `pill status ${s.claude ? 'on' : 'off'}`;
   $('#pill-voice').className = `pill status ${s.elevenlabs ? 'on' : ''}`;
   $('#lib-count').textContent = s.library.works;
