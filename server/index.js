@@ -43,6 +43,7 @@ app.get('/api/status', (_req, res) => {
     elevenlabs: eleven,
     storage: store.mode,
     storageError: store.storageError,
+    opening: oracle.getProfile().opening || '',
     live: Boolean(process.env.ELEVENLABS_API_KEY && AGENT_ID),
     library: lib,
     integrations: [
@@ -174,7 +175,7 @@ app.get('/api/live/start', async (_req, res) => {
   res.json({
     conversationToken: token,
     dynamicVariables: {
-      greeting: p.name ? `${p.name}. I'm here. What's on your heart?` : "I'm here. What's on your heart?",
+      greeting: p.opening || (p.name ? `${p.name}. I'm here. What's on your heart?` : "I'm here. What's on your heart?"),
       profile: oracle.profileBlock().slice(0, 6000),
       library_overview: library.overview().slice(0, 3000),
     },
@@ -184,8 +185,14 @@ app.get('/api/live/start', async (_req, res) => {
 app.post('/api/live/library', async (req, res) => {
   const passages = await library.search(String(req.body.query || ''), 5);
   if (!passages.length) return res.json({ result: 'No closely matching passages in their library. Draw on broadly known wisdom and say so.' });
+  const notes = [...new Set(passages.map((p) => p.docId))]
+    .map((id) => library.getDoc(id))
+    .filter((d) => d?.study)
+    .slice(0, 3)
+    .map((d) => library.studyBrief(d, true));
   res.json({
-    result: passages.map((p, i) => `[${i + 1}] ${p.title}${p.author ? ` — ${p.author}` : ''}\n${p.text}`).join('\n\n'),
+    result: (notes.length ? `Your study notes:\n${notes.join('\n\n')}\n\nPassages:\n` : '') +
+      passages.map((p, i) => `[${i + 1}] ${p.title}${p.author ? ` — ${p.author}` : ''}\n${p.text}`).join('\n\n'),
     sources: passages.map((p) => ({ title: p.title, author: p.author, docId: p.docId, excerpt: p.text.slice(0, 220) })),
   });
 });

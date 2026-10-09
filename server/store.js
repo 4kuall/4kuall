@@ -33,6 +33,10 @@ export const DEFAULT_PROFILE = {
   insights: [],
   traits: {},
   lastSummary: '',
+  // The Oracle's own continuity: private notes, what it's wondering, how it will greet you.
+  journal: [],
+  nextThought: '',
+  opening: '',
 };
 
 let pool;
@@ -194,6 +198,12 @@ export async function putDoc(doc, chunks) {
   } finally {
     client.release();
   }
+}
+
+/** Update a work's metadata (e.g. its study notes) without touching its passages. */
+export async function updateDoc(doc) {
+  if (mode === 'local') return writeLocalLibrary();
+  await pool.query('update oracle_docs set meta = $2 where id = $1', [doc.id, JSON.stringify(doc)]);
 }
 
 export async function deleteDoc(id) {

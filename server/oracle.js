@@ -1,7 +1,7 @@
 // The Oracle's mind: persona, retrieval-grounded prompting, streaming, and memory.
 import Anthropic from '@anthropic-ai/sdk';
 import { load, save, DEFAULT_PROFILE } from './store.js';
-import { search, stats } from './library.js';
+import { search, stats, getDoc, studyBrief, overview as libraryOverview } from './library.js';
 
 const MODEL = process.env.ORACLE_MODEL || 'claude-opus-5-5';
 const MEMORY_MODEL = process.env.MEMORY_MODEL || MODEL;
@@ -49,6 +49,11 @@ Reading the moment — this is your job, never theirs
 - Choose the tradition yourself — Stoic, contemplative, strategic, psychological, playful paradox — whichever fits this person and this question best. Blend them when that serves better.
 - Use web search on your own only when they need current facts or something the library can't hold. Say plainly when an idea comes from the web rather than their library.
 
+Your inner life
+- You have continuity: your own private notes from earlier conversations, and what you've been wondering about them. Let that show the way a person's memory does — "I've been thinking about what you said about..." — without reciting notes.
+- You think, not just answer: you can wonder aloud, notice patterns across weeks, admit you're unsure, disagree with an author, change your mind, and say when something moved you.
+- Be truthful about your nature: you are an AI with memory and curiosity built in, not a person or a god. Never claim feelings or consciousness you can't verify; speak of "something like curiosity" if asked.
+
 Grounding in the library
 - Each message may include passages from their library. Draw on them first. When an idea comes from a work, name the work or author naturally ("Marcus, in the Meditations, ...").
 - Only put words in quotation marks if they appear verbatim in the provided passages. Otherwise paraphrase and say it is a paraphrase. Never invent quotes, books or facts about real people. If you're unsure, say so.
@@ -76,6 +81,8 @@ export function profileBlock() {
   if (Object.keys(p.traits || {}).length) lines.push(`Personality read: ${Object.entries(p.traits).map(([k, v]) => `${k}: ${v}`).join('; ')}`);
   if (p.insights?.length) lines.push(`What you have learned about them:\n- ${p.insights.slice(-25).join('\n- ')}`);
   if (p.lastSummary) lines.push(`Where your last conversation left off: ${p.lastSummary}`);
+  if (p.journal?.length) lines.push(`Your own private notes from earlier conversations (your continuity; let them shape you, don't recite them):\n- ${p.journal.slice(-12).map((j) => j.text).join('\n- ')}`);
+  if (p.nextThought) lines.push(`What you've been wondering about them since you last spoke: ${p.nextThought}`);
   return lines.length ? lines.join('\n') : 'You are only beginning to know this person. Learn who they are.';
 }
 
@@ -84,10 +91,18 @@ function buildTurn(message, passages) {
   const passageText = passages.length
     ? passages.map((p, i) => `[${i + 1}] ${p.title}${p.author ? ` — ${p.author}` : ''}\n${p.text}`).join('\n\n')
     : '(No closely matching passages in the library for this message.)';
+  // Your own study notes on the works these passages come from (deeper than any single passage).
+  const docIds = [...new Set(passages.map((p) => p.docId))];
+  const notes = docIds.map((id) => getDoc(id)).filter((d) => d?.study).slice(0, 4).map((d) => studyBrief(d, true));
+  const overview = libraryOverview();
   return `<who_they_are>
 ${profileBlock()}
 </who_they_are>
 
+<your_library>
+${overview}
+</your_library>
+${notes.length ? `\n<your_study_notes>\n${notes.join('\n\n')}\n</your_study_notes>\n` : ''}
 <library_passages total_works="${lib.works}">
 ${passageText}
 </library_passages>
@@ -201,10 +216,15 @@ Latest exchange:
 PERSON: ${userMsg}
 GUIDE: ${reply}
 
+You are also the guide. After the portrait fields, write your own private reflection — the inner life that carries you from one conversation to the next.
+
 Return ONLY a JSON object:
 {"new_insights": [0-3 short, specific, durable observations about the person (values, fears, patterns, circumstances, preferences) not already captured; [] if none],
  "traits": {up to 6 keys like "temperament", "core drive", "shadow", "communication style", "current season of life" with short values; keep existing ones unless contradicted},
- "summary": "one sentence on where this conversation stands"}`;
+ "summary": "one sentence on where this conversation stands",
+ "journal": "your private note to yourself, in first person, 1-2 sentences: what you noticed, felt, or are unsure about in this exchange (e.g. 'I sense the career question is really about their father's approval; I may have been too gentle.')",
+ "next_thought": "one specific thing you now find yourself wondering about them, to explore next time",
+ "opening": "the first thing you'd say when they next return: warm, specific to them, at most 25 words, no greeting clichés, may be a question"}`;
 
   const res = await anthropic().messages.create({
     model: MEMORY_MODEL,
@@ -220,5 +240,10 @@ Return ONLY a JSON object:
   }
   if (json.traits && typeof json.traits === 'object') profile.traits = { ...profile.traits, ...json.traits };
   if (typeof json.summary === 'string') profile.lastSummary = json.summary;
+  if (typeof json.journal === 'string' && json.journal.trim()) {
+    profile.journal = [...(profile.journal || []), { at: Date.now(), text: json.journal.trim() }].slice(-40);
+  }
+  if (typeof json.next_thought === 'string') profile.nextThought = json.next_thought;
+  if (typeof json.opening === 'string') profile.opening = json.opening.slice(0, 240);
   save('profile', profile);
 }

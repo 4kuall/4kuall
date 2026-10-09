@@ -60,8 +60,6 @@ export class Oracle3D {
     this.energy = 0; // 0..1 voice amplitude
     this.targetEnergy = 0;
     this.pointer = new THREE.Vector2();
-    this.lidOpen = 1;
-    this.nextBlink = 2;
     this.colorA = new THREE.Color(MOOD_COLORS.serene[0]);
     this.colorB = new THREE.Color(MOOD_COLORS.serene[1]);
     this.targetA = this.colorA.clone();
@@ -95,6 +93,8 @@ export class Oracle3D {
     addEventListener('resize', () => this.#resize());
     addEventListener('pointermove', (e) => {
       this.pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+      this.lastPointer = performance.now();
+      this.lastActivity = this.lastPointer;
     });
     this.#resize();
     this.clock = new THREE.Clock();
@@ -107,6 +107,7 @@ export class Oracle3D {
 
   setMood(mood) {
     const [a, b] = MOOD_COLORS[mood] || MOOD_COLORS.serene;
+    this.mood = MOOD_COLORS[mood] ? mood : 'serene';
     this.targetA.set(a);
     this.targetB.set(b);
   }
@@ -221,44 +222,88 @@ export class Oracle3D {
 
   #buildEye() {
     const eye = new THREE.Group();
-    eye.position.set(0, 0.18, 1.52);
+    eye.position.set(0, 0.18, 1.5);
 
-    // Almond-shaped sclera glow.
-    const almond = new THREE.Shape();
-    almond.moveTo(-0.62, 0);
-    almond.quadraticCurveTo(0, 0.5, 0.62, 0);
-    almond.quadraticCurveTo(0, -0.5, -0.62, 0);
-    this.sclera = new THREE.Mesh(
-      new THREE.ShapeGeometry(almond, 48),
-      new THREE.MeshBasicMaterial({ color: 0xfff1d6, transparent: true, opacity: 0.6 }),
-    );
-    eye.add(this.sclera);
-
-    // Iris with radial filaments.
-    this.irisUniforms = { uTime: { value: 0 }, uA: { value: this.colorA }, uB: { value: this.colorB }, uPupil: { value: 0.35 } };
-    this.iris = new THREE.Mesh(
-      new THREE.CircleGeometry(0.22, 64),
+    // A single procedural eye: almond opening with real upper/lower lids, a shaded
+    // sclera, a fibrous iris that moves inside the socket, a breathing pupil and a
+    // corneal highlight that stays put while the iris moves — the cue that makes
+    // eyes read as wet and alive.
+    this.eyeUniforms = {
+      uTime: { value: 0 },
+      uA: { value: this.colorA },
+      uB: { value: this.colorB },
+      uGaze: { value: new THREE.Vector2() },
+      uUpper: { value: 1 },
+      uLower: { value: 1 },
+      uPupil: { value: 0.38 },
+      uGlow: { value: 0.4 },
+    };
+    this.eyeMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 1.1),
       new THREE.ShaderMaterial({
         transparent: true,
-        uniforms: this.irisUniforms,
-        vertexShader: `varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
+        depthWrite: false,
+        uniforms: this.eyeUniforms,
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
         fragmentShader: `
-          uniform float uTime; uniform vec3 uA; uniform vec3 uB; uniform float uPupil; varying vec2 vUv;
+          uniform float uTime; uniform vec3 uA; uniform vec3 uB; uniform vec2 uGaze;
+          uniform float uUpper; uniform float uLower; uniform float uPupil; uniform float uGlow;
+          varying vec2 vUv;
+          float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+          float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+            return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
+          float fbm(vec2 p){ float v=0.0, a=0.5; for(int i=0;i<4;i++){ v+=a*vnoise(p); p*=2.03; a*=0.5; } return v; }
           void main(){
-            vec2 p=vUv-0.5; float r=length(p)*2.0; float a=atan(p.y,p.x);
-            float fil=0.5+0.5*sin(a*48.0+sin(a*7.0+uTime)*2.0);
-            vec3 col=mix(uA,uB,r)*(0.7+fil*0.6);
-            col+=vec3(1.0,0.9,0.7)*smoothstep(0.92,1.0,r)*0.8;
-            col=mix(vec3(0.0),col,smoothstep(uPupil,uPupil+0.06,r));
-            col+=vec3(1.0)*smoothstep(0.08,0.0,length(p-vec2(-0.12,0.12)))*0.9;
-            gl_FragColor=vec4(col,1.0-smoothstep(0.97,1.0,r));
+            vec2 p = (vUv - 0.5) * vec2(1.6, 1.1);
+            const float W = 0.68;
+            float t = clamp(p.x / W, -1.0, 1.0);
+            float shape = pow(max(1.0 - t*t, 0.0), 0.75);
+            float upper = 0.36 * shape * uUpper - 0.015;
+            float lower = -0.29 * shape * uLower + 0.015;
+            float dU = upper - p.y, dL = p.y - lower;
+            float inside = smoothstep(0.0, 0.012, dU) * smoothstep(0.0, 0.012, dL) * step(abs(p.x), W);
+
+            // Sclera: warm off-white, darker toward the corners and under the upper lid.
+            vec3 sclera = vec3(0.42, 0.40, 0.38) * (1.0 - 0.5 * pow(abs(t), 2.2));
+            sclera += (fbm(p * 18.0) - 0.5) * 0.03;
+            sclera = mix(sclera, uA, 0.08);
+
+            // Iris & pupil, moving with the gaze.
+            vec2 c = uGaze * vec2(0.34, 0.15);
+            vec2 q = p - c;
+            float R = 0.19;
+            float d = length(q) / R;
+            float a = atan(q.y, q.x);
+            float fib = fbm(vec2(a * 7.0, d * 2.5 - uTime * 0.03)) * 0.7 + fbm(vec2(a * 23.0, d * 6.0)) * 0.4;
+            vec3 iris = mix(uB * 0.35, uA * 0.7, smoothstep(0.15, 0.95, d * 0.6 + fib * 0.6));
+            iris *= 0.6 + 0.6 * fib;
+            iris += uA * 0.22 * smoothstep(0.12, 0.0, abs(d - (uPupil + 0.12)));   // collarette
+            iris *= 1.0 - 0.85 * smoothstep(0.78, 1.0, d);                            // limbal ring
+            float pupil = 1.0 - smoothstep(uPupil - 0.04, uPupil + 0.02, d);
+            iris = mix(iris, vec3(0.0), pupil);
+            float irisMask = 1.0 - smoothstep(0.97, 1.03, d);
+            vec3 col = mix(sclera, iris, irisMask);
+
+            // Shadow cast by the upper lid; slight occlusion near the lower lid.
+            col *= mix(0.45, 1.0, smoothstep(0.0, 0.11, dU));
+            col *= mix(0.75, 1.0, smoothstep(0.0, 0.05, dL));
+
+            // Corneal highlights: fixed light source, nudged a little by the eyeball turning.
+            vec2 hl = c * 0.35 + vec2(-0.07, 0.07);
+            col += vec3(1.0) * smoothstep(0.035, 0.0, length(p - hl)) * 0.95;
+            col += vec3(1.0) * smoothstep(0.018, 0.0, length(p - hl - vec2(0.11, -0.05))) * 0.5;
+
+            // Luminous lid line and outer aura in the Oracle's colour.
+            float edge = 1.0 - smoothstep(0.0, 0.03, min(dU, dL));
+            col += uA * edge * inside * 0.35;
+            float outside = 1.0 - inside;
+            float distOut = max(max(-dU, -dL), abs(p.x) - W);
+            float halo = smoothstep(0.09, 0.0, distOut) * outside * uGlow;
+            gl_FragColor = vec4(col * inside + uA * halo, max(inside, halo * 0.8));
           }`,
       }),
     );
-    this.iris.position.z = 0.01;
-    eye.add(this.iris);
-
-    // Eyelid aura: the whole eye scales vertically for blinks.
+    eye.add(this.eyeMesh);
     this.eye = eye;
     this.core.add(eye);
 
@@ -267,11 +312,154 @@ export class Oracle3D {
     const pts = [];
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
-      pts.push(Math.cos(a) * 0.75, Math.sin(a) * 0.5, 0, Math.cos(a) * 1.25, Math.sin(a) * 0.85, 0);
+      pts.push(Math.cos(a) * 0.78, Math.sin(a) * 0.52, 0, Math.cos(a) * 1.25, Math.sin(a) * 0.85, 0);
     }
     rayGeo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     this.rays = new THREE.LineSegments(rayGeo, new THREE.LineBasicMaterial({ color: this.colorA, transparent: true, opacity: 0.25 }));
+    this.rays.position.z = -0.01;
     eye.add(this.rays);
+
+    // Attention system state.
+    this.gaze = new THREE.Vector2();        // where the eye points now (-1..1)
+    this.gazeTarget = new THREE.Vector2();  // where it wants to look
+    this.gazeFrom = new THREE.Vector2();
+    this.saccadeT = 1;                      // 0..1 progress of the current saccade
+    this.nextGlance = 1.5;
+    this.nextMicro = 0.4;
+    this.blinkT = -1;                       // >=0 while blinking
+    this.nextBlink = 2.5;
+    this.doubleBlink = false;
+    this.lastActivity = performance.now();
+    this.lastPointer = 0;
+    this.typingUntil = 0;
+    this.mood = 'serene';
+    this.headTilt = 0;
+  }
+
+  /** The app tells the eye what you're doing so it can pay attention. */
+  notice(kind) {
+    const now = performance.now();
+    this.lastActivity = now;
+    if (kind === 'typing') this.typingUntil = now + 1500;
+  }
+
+  #lookAt(x, y) {
+    this.gazeFrom.copy(this.gaze);
+    this.gazeTarget.set(THREE.MathUtils.clamp(x, -1, 1), THREE.MathUtils.clamp(y, -1, 1));
+    this.saccadeT = 0;
+    // Big eye movements often come with a blink, as in people.
+    if (this.gazeFrom.distanceTo(this.gazeTarget) > 0.7 && Math.random() < 0.3 && this.blinkT < 0) this.blinkT = 0;
+  }
+
+  #attention(dt, t) {
+    const s = this.state;
+    const now = performance.now();
+    const idleFor = (now - this.lastActivity) / 1000;
+    const pointerFresh = now - this.lastPointer < 2500;
+    this.nextGlance -= dt;
+
+    if (now < this.typingUntil) {
+      // Watching you type: eyes drop toward the composer, reading along.
+      if (this.nextGlance < 0) { this.#lookAt(-0.25 + Math.random() * 0.5, -0.85); this.nextGlance = 0.35 + Math.random() * 0.4; }
+    } else if (this.nextGlance < 0) {
+      let x = 0, y = 0, hold = 2;
+      if (s === 'thinking') {
+        // Recall: up and to one side, flicking between thoughts.
+        x = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.4); y = 0.45 + Math.random() * 0.4; hold = 0.6 + Math.random() * 1.1;
+      } else if (s === 'listening') {
+        // Holding your gaze, with the small eye-to-eye shifts people make.
+        x = (Math.random() - 0.5) * 0.18; y = -0.05 + (Math.random() - 0.5) * 0.12; hold = 0.8 + Math.random() * 1.6;
+      } else if (s === 'speaking') {
+        // Mostly on you; glancing away now and then while forming the next thought.
+        if (Math.random() < 0.25) { x = (Math.random() - 0.5) * 1.3; y = 0.1 + Math.random() * 0.5; hold = 0.4 + Math.random() * 0.6; }
+        else { x = (Math.random() - 0.5) * 0.2; y = (Math.random() - 0.5) * 0.12; hold = 1 + Math.random() * 2; }
+      } else if (pointerFresh && Math.random() < 0.7) {
+        // Something moved: look at it.
+        x = this.pointer.x * 0.9; y = this.pointer.y * 0.8; hold = 0.6 + Math.random() * 1.2;
+      } else if (idleFor > 25) {
+        // You've gone quiet: it wonders, looks around, checks back on you.
+        const r = Math.random();
+        if (r < 0.35) { x = 0; y = -0.1; hold = 1.5 + Math.random() * 2; }                 // back to you
+        else if (r < 0.55) { x = (Math.random() - 0.5) * 0.6; y = -0.8; hold = 1 + Math.random(); } // the input, waiting
+        else { x = (Math.random() - 0.5) * 1.8; y = (Math.random() - 0.3) * 1.2; hold = 0.8 + Math.random() * 2.2; }
+      } else {
+        const r = Math.random();
+        if (r < 0.6) { x = (Math.random() - 0.5) * 0.25; y = (Math.random() - 0.5) * 0.15; hold = 1.5 + Math.random() * 2.5; }
+        else { x = (Math.random() - 0.5) * 1.4; y = (Math.random() - 0.4) * 0.9; hold = 0.5 + Math.random() * 1.5; }
+      }
+      this.#lookAt(x, y);
+      this.nextGlance = hold;
+    }
+
+    // Saccade: a fast, eased jump (~60–90 ms), then fixation with micro-saccades and drift.
+    if (this.saccadeT < 1) {
+      this.saccadeT = Math.min(1, this.saccadeT + dt / 0.075);
+      const k = 1 - Math.pow(1 - this.saccadeT, 3);
+      this.gaze.lerpVectors(this.gazeFrom, this.gazeTarget, k);
+    } else {
+      this.nextMicro -= dt;
+      if (this.nextMicro < 0) {
+        this.gaze.x += (Math.random() - 0.5) * 0.035;
+        this.gaze.y += (Math.random() - 0.5) * 0.025;
+        this.nextMicro = 0.25 + Math.random() * 0.7;
+      }
+      this.gaze.x += (this.gazeTarget.x - this.gaze.x) * dt * 1.5 + Math.sin(t * 1.7) * 0.0006;
+      this.gaze.y += (this.gazeTarget.y - this.gaze.y) * dt * 1.5;
+    }
+    this.eyeUniforms.uGaze.value.copy(this.gaze);
+
+    // Head follows the eyes, slower and less far; a curious tilt when it's waiting on you.
+    const tilt = idleFor > 25 && s === 'idle' ? Math.sin(t * 0.25) * 0.08 : s === 'listening' ? 0.04 : 0;
+    this.headTilt += (tilt - this.headTilt) * dt * 1.2;
+    this.core.rotation.y += (this.gaze.x * 0.28 - this.core.rotation.y) * dt * 1.6;
+    this.core.rotation.x += (-this.gaze.y * 0.18 - this.core.rotation.x) * dt * 1.6;
+    this.core.rotation.z += (this.headTilt - this.core.rotation.z) * dt * 1.6;
+
+    // Blinks: ~12–20 a minute, quick to close, slower to open, sometimes double;
+    // slower and rarer while focused, more often when speaking.
+    this.nextBlink -= dt;
+    if (this.nextBlink < 0 && this.blinkT < 0) {
+      this.blinkT = 0;
+      this.doubleBlink = Math.random() < 0.15;
+      const base = s === 'listening' ? 4.5 : s === 'speaking' ? 2.6 : s === 'thinking' ? 5 : 3.6;
+      this.nextBlink = base * (0.4 + Math.random() * 1.2);
+    }
+    let closed = 0;
+    if (this.blinkT >= 0) {
+      this.blinkT += dt;
+      const dur = idleFor > 25 ? 0.42 : 0.26; // slow, sleepy blinks when nothing is happening
+      const u = this.blinkT / dur;
+      closed = u < 0.35 ? u / 0.35 : Math.max(0, 1 - (u - 0.35) / 0.65);
+      if (u >= 1) {
+        if (this.doubleBlink) { this.doubleBlink = false; this.blinkT = -0.12; this.nextBlink = Math.min(this.nextBlink, 0.001); }
+        else this.blinkT = -1;
+      }
+    }
+
+    // Lid shape: mood and attention, plus lids following vertical gaze like real eyelids.
+    const m = this.mood;
+    let up = s === 'thinking' ? 0.62 : s === 'listening' ? 1.08 : 0.95;
+    let low = 1;
+    if (m === 'awed' || m === 'curious') up += 0.1;
+    if (m === 'grave' || m === 'melancholic') up -= 0.18;
+    if (m === 'fierce') { up -= 0.22; low -= 0.15; }
+    if (m === 'joyful' || m === 'compassionate') low -= 0.25; // the smile in the eyes
+    if (idleFor > 60 && s === 'idle') up -= 0.12;             // drowsy when left alone
+    up += this.gaze.y * 0.12;
+    low -= this.gaze.y * 0.08;
+    up *= 1 - closed;
+    low *= 1 - closed * 0.35;
+    const U = this.eyeUniforms;
+    U.uUpper.value += (up - U.uUpper.value) * Math.min(1, dt * (closed > 0 ? 40 : 10));
+    U.uLower.value += (low - U.uLower.value) * Math.min(1, dt * 10);
+
+    // Pupil: dilates while listening or in awe, narrows in thought or fierceness, and never sits perfectly still.
+    let pupil = s === 'listening' ? 0.46 : s === 'thinking' ? 0.27 : 0.36 + this.energy * 0.06;
+    if (m === 'awed') pupil += 0.06;
+    if (m === 'fierce') pupil -= 0.07;
+    pupil += Math.sin(t * 0.9) * 0.012 + Math.sin(t * 2.3) * 0.006; // hippus
+    U.uPupil.value += (pupil - U.uPupil.value) * dt * 3;
+    U.uGlow.value = 0.35 + this.energy * 0.4 + (s === 'thinking' ? 0.2 : 0);
   }
 
   #buildRings() {
@@ -354,7 +542,7 @@ export class Oracle3D {
     const think = s === 'thinking' ? 1 : 0;
     this.coreUniforms.uThink.value += (think - this.coreUniforms.uThink.value) * dt * 3;
 
-    for (const u of [this.cosmos.uniforms, this.coreUniforms, this.irisUniforms, this.dustUniforms]) u.uTime.value = t;
+    for (const u of [this.cosmos.uniforms, this.coreUniforms, this.eyeUniforms, this.dustUniforms]) u.uTime.value = t;
     this.coreUniforms.uEnergy.value = this.energy;
 
     // Breathing.
@@ -363,27 +551,7 @@ export class Oracle3D {
     this.seed.scale.setScalar(1 + Math.sin(t * 2.2) * 0.1 + this.energy * 0.8);
     this.seed.material.opacity = 0.25 + this.energy * 0.25 + think * 0.2;
 
-    // Gaze follows you, drifts while thinking.
-    const gx = s === 'thinking' ? Math.sin(t * 0.7) * 0.25 : this.pointer.x * 0.35;
-    const gy = s === 'thinking' ? 0.2 + Math.sin(t * 0.5) * 0.08 : this.pointer.y * 0.25;
-    this.core.rotation.y += (gx - this.core.rotation.y) * dt * 2;
-    this.core.rotation.x += (-gy - this.core.rotation.x) * dt * 2;
-    this.iris.position.x += (this.pointer.x * 0.12 - this.iris.position.x) * dt * 5;
-    this.iris.position.y += (this.pointer.y * 0.06 - this.iris.position.y) * dt * 5;
-
-    // Pupil: dilates when listening, narrows when thinking.
-    const pupil = s === 'listening' ? 0.5 : s === 'thinking' ? 0.18 : 0.32 + this.energy * 0.12;
-    this.irisUniforms.uPupil.value += (pupil - this.irisUniforms.uPupil.value) * dt * 4;
-
-    // Blinking and lid aperture.
-    this.nextBlink -= dt;
-    let lidTarget = s === 'thinking' ? 0.35 : s === 'listening' ? 1.15 : 1;
-    if (this.nextBlink < 0) {
-      lidTarget = 0.04;
-      if (this.nextBlink < -0.12) this.nextBlink = 2 + Math.random() * 5;
-    }
-    this.lidOpen += (lidTarget - this.lidOpen) * Math.min(1, dt * 22);
-    this.eye.scale.set(1, this.lidOpen, 1);
+    this.#attention(dt, t);
     this.rays.material.opacity = 0.12 + this.energy * 0.6 + think * 0.25;
     this.rays.rotation.z = t * 0.1;
 

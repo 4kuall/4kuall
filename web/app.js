@@ -10,6 +10,8 @@ const el = (tag, cls, text) => {
   return n;
 };
 const oracle = new Oracle3D($('#stage'));
+// Voice-direction tags like [warm] or [slow] are for the speech engine, not for reading.
+const stripTags = (text) => text.replace(/\[(?:mood:\s*)?[a-z][a-z \-]{0,24}\]\s*/gi, '');
 const ambience = new Ambience();
 
 const store = {
@@ -130,7 +132,7 @@ function ensureAudio() {
 }
 
 function enqueueSpeech(text) {
-  const clean = text.replace(/\[mood:[^\]]*\]/gi, '').replace(/[*_#>`]/g, '').trim();
+  const clean = stripTags(text).replace(/[*_#>`]/g, '').trim();
   if (!clean) return;
   lastSpoken.push(clean);
   if (!settings.voice) return;
@@ -307,7 +309,7 @@ async function startLive() {
     const [{ Conversation }, session] = await Promise.all([import(ELEVEN_CLIENT), getJSON('/api/live/start')]);
     liveTurns = [];
     $('#hero').hidden = true;
-    $('#answer').hidden = false;
+    showAnswer();
     delete $('#mood-badge').dataset.mood;
     live = await Conversation.startSession({
       conversationToken: session.conversationToken,
@@ -327,8 +329,9 @@ async function startLive() {
       },
       onConnect: () => { setLiveUI(true); setState('listening'); },
       onModeChange: ({ mode }) => setState(mode === 'speaking' ? 'speaking' : 'listening'),
-      onMessage: ({ message, role, event_id: eventId, response_id: responseId }) => {
+      onMessage: ({ message: raw, role, event_id: eventId, response_id: responseId }) => {
         const r = role === 'agent' ? 'assistant' : 'user';
+        const message = stripTags(raw);
         // Streamed parts/resends share an id: update that turn instead of adding a duplicate.
         const key = `${r}:${responseId ?? eventId}`;
         const existing = liveTurns.find((t) => t.key === key);
@@ -338,6 +341,7 @@ async function startLive() {
         } else {
           liveTurns.push({ key, role: r, text: message, el: addLog(r, message) });
         }
+        showAnswer();
         if (r === 'user') { $('#you').textContent = message; $('#said').textContent = ''; $('#sources').innerHTML = ''; }
         else $('#said').textContent = message;
       },
@@ -356,7 +360,7 @@ async function startLive() {
     live = null;
     setLiveUI(false);
     setState('idle');
-    $('#answer').hidden = false;
+    showAnswer();
     $('#said').textContent = err.name === 'NotAllowedError' ? 'The Oracle needs your microphone to talk live. Allow it in your browser settings.' : `Couldn't go live: ${err.message}`;
   }
 }
@@ -448,7 +452,7 @@ async function ask(message) {
   autoGrow();
   setState('thinking');
   $('#hero').hidden = true;
-  $('#answer').hidden = false;
+  showAnswer();
   $('#sources').innerHTML = '';
   delete $('#mood-badge').dataset.mood;
   $('#mood-badge').textContent = 'Contemplating';
@@ -483,8 +487,8 @@ async function ask(message) {
     }
     if (oracle.state === 'thinking') setState('speaking');
     shown += chunk;
-    said.textContent = shown;
-    logEntry.textContent = shown;
+    said.textContent = stripTags(shown);
+    logEntry.textContent = stripTags(shown);
     said.scrollTop = 1e9;
     sentenceBuf += chunk;
     // Voice each complete sentence (or paragraph) as soon as it lands.
@@ -553,7 +557,29 @@ $('#input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask($('#input').value.trim()); }
 });
 function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }
-$('#input').addEventListener('input', autoGrow);
+$('#input').addEventListener('input', () => { autoGrow(); oracle.notice('typing'); });
+addEventListener('pointerdown', () => oracle.notice('touch'));
+
+// ───────────────── Show / hide the conversation card ─────────────────
+function showAnswer() {
+  $('#answer').hidden = false;
+  $('#hero').hidden = true;
+  $('#show-answer').hidden = true;
+}
+function hideAnswer() {
+  $('#answer').hidden = true;
+  const hasConversation = $('#said').textContent.trim() || $('#you').textContent.trim();
+  $('#show-answer').hidden = !hasConversation;
+  $('#hero').hidden = Boolean(live);
+}
+$('#close-answer').onclick = hideAnswer;
+$('#show-answer').onclick = showAnswer;
+// Tapping the Oracle itself toggles the card, so the eye can have the whole screen.
+$('#stage').addEventListener('click', () => {
+  if (document.body.dataset.view !== 'oracle') return;
+  if (!$('#answer').hidden) hideAnswer();
+  else if (!$('#show-answer').hidden) showAnswer();
+});
 
 // ───────────────── Status & integrations ─────────────────
 const INT_COLORS = { claude: '#d97757', websearch: '#7cc4ff', elevenlabs: '#f5f6f7', huggingface: '#ffd21e', gutenberg: '#c9a6ff', web: '#d4ff3a' };
@@ -578,10 +604,12 @@ async function loadStatus() {
     : !s.claude
     ? 'Asleep — set ANTHROPIC_API_KEY on the server'
     : s.library.works
-      ? `${s.library.works} works · ${s.library.passages.toLocaleString()} passages${s.library.semantic.ready ? ' · semantic memory on' : ''}`
+      ? `${s.library.works} works${s.library.studied ? ` · ${s.library.studied} studied` : ''}${s.library.studying ? ` · studying ${s.library.studying}…` : ''}`
       : 'Awake — feed it books in Library or Discover';
   $('#eyebrow').innerHTML = '';
   $('#eyebrow').append(el('i', 'dot'), ` ${eyebrow}`);
+  // The Oracle's own first words, written after your last conversation.
+  if (s.opening) { $('#hero-line').textContent = `“${s.opening}”`; $('#hero-line').classList.add('opening'); }
 
   if (!voicesLoaded && s.elevenlabs) {
     voicesLoaded = true;
@@ -646,7 +674,10 @@ async function refreshLibrary() {
   list.innerHTML = '';
   if (!libraryDocs.length) list.append(el('p', 'empty', 'Nothing here yet. Drop a book above, or open Discover for one-click classics.'));
   for (const d of libraryDocs.slice().reverse()) {
-    const { card } = bookCard({ title: d.title, author: d.author, cover: d.cover, tag: d.type === 'book' ? null : d.type, meta: `${d.author ? `${d.author} · ` : ''}${d.words.toLocaleString()} words` });
+    const studyTag = { queued: 'Studying…', studying: 'Studying…', done: 'Studied ✓', failed: 'Not studied' }[d.studyStatus];
+    const { card } = bookCard({ title: d.title, author: d.author, cover: d.cover, tag: studyTag || (d.type === 'book' ? null : d.type), meta: `${d.author ? `${d.author} · ` : ''}${d.words.toLocaleString()} words` });
+    if (d.studyStatus === 'done') card.querySelector('.tag')?.classList.add('done');
+    card.onclick = (e) => { if (!e.target.closest('.remove')) openStudy(d); };
     const rm = el('button', 'remove', '✕');
     rm.title = 'Remove from library';
     rm.onclick = async () => {
@@ -664,8 +695,38 @@ function toast(id, msg, err = false) {
   $(id).classList.toggle('err', err);
 }
 
+function openStudy(d) {
+  const box = $('#study-body');
+  box.innerHTML = '';
+  box.append(el('span', 'kicker', d.author || ''), el('h3', '', d.title));
+  const s = d.study;
+  if (!s) {
+    box.append(el('p', 'muted', d.studyStatus === 'failed'
+      ? `The Oracle couldn't study this one (${d.studyError || 'unknown error'}). It can still quote and search it.`
+      : 'The Oracle is reading this right now. Its notes will appear here in a few minutes.'));
+  } else {
+    box.append(el('p', 'essence', s.essence));
+    const section = (title, items) => {
+      if (!items?.length) return;
+      box.append(el('b', 'sec', title));
+      const ul = el('ul');
+      for (const it of items) ul.append(el('li', '', it));
+      box.append(ul);
+    };
+    section('Key ideas', s.keyIdeas);
+    section('Living it', s.howToApply);
+    section('Especially for', s.forMoments);
+    if (s.authorVoice) { box.append(el('b', 'sec', 'How the author thinks')); box.append(el('p', '', s.authorVoice)); }
+    section('Passages (verified word-for-word)', s.passages.map((q) => `“${q}”`));
+    if (s.partial) box.append(el('p', 'muted', 'This book was very long; the notes cover its first part.'));
+  }
+  $('#study').hidden = false;
+}
+$('#study').onclick = (e) => { if (e.target.id === 'study' || e.target.id === 'close-study') $('#study').hidden = true; };
+
 async function uploadFiles(files) {
   if (!files.length) return;
+  showReflection(`Absorbing ${files.length === 1 ? files[0].name : `${files.length} works`}…`);
   const fd = new FormData();
   for (const f of files) fd.append('files', f);
   toast('#lib-status', `Absorbing ${files.length} work(s)… large books take a moment.`);
@@ -680,6 +741,15 @@ async function uploadFiles(files) {
   refreshLibrary();
 }
 $('#files').onchange = (e) => uploadFiles([...e.target.files]);
+// Add books straight from the home screen; the Oracle studies them in the background.
+$('#attach').onclick = () => $('#quick-files').click();
+$('#quick-files').onchange = async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  await uploadFiles(files);
+  showReflection('It will study them in the background and draw on them when you talk.');
+  loadStatus();
+};
 const drop = $('#drop');
 ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('hover'); }));
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('hover'); }));
@@ -836,7 +906,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
   refreshLibrary();
   try {
     const hist = await getJSON('/api/history');
-    for (const m of hist) addLog(m.role, m.content.replace(/^\s*\[mood:[^\]]*\]\s*/i, ''));
+    for (const m of hist) addLog(m.role, stripTags(m.content));
   } catch { /* empty */ }
   setInterval(loadStatus, 15000);
 })();

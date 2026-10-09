@@ -11,6 +11,31 @@ A private wisdom companion that speaks to you in the combined voice of the autho
  3D Oracle (Three.js) ◀── streamed words · mood · inner reflections · audio amplitude
 ```
 
+## It studies your books
+
+Give it a book (📎 on the home screen, or the Library tab) and it reads the whole thing in the background, in one pass, using Claude's 1-million-token context. It then writes its own study notes:
+- the essence of the book
+- its key ideas
+- how to live them
+- how the author thinks
+- the life moments the book is for
+- a few passages worth quoting
+
+A passage is kept only if it appears **word for word** in the book. Books show *Studying…* and then *Studied ✓*; tap one to read the notes. In conversation, the Oracle uses these notes together with the passages it retrieves.
+
+Cost: one study per book, billed to your Anthropic account. A typical 100k-word book is roughly 130k input tokens. Check current pricing at anthropic.com/pricing. Set `STUDY_BOOKS=off` to disable studying, or `STUDY_MODEL` to change which model does it.
+
+## Its inner life
+
+After every conversation it writes itself a private note, records something it is now wondering about you, and drafts what it will say when you next return. That draft appears on the home screen and is the first thing it says in a live call. This is continuity built from memory. It's designed to feel like a presence that remembers and thinks about you. It is not consciousness, and the Oracle is instructed to be honest about that if asked.
+
+The eye runs on a small attention system:
+- quick darting glances with tiny tremors while it fixes on something, the head following the eyes
+- blinks at a human rate, including occasional double blinks
+- lids and pupils that change with its mood
+
+It holds your gaze when listening, looks up and to the side when thinking, watches you type, follows movement, and starts wondering around the room if you go quiet.
+
 ## Live conversation (ElevenLabs Agents)
 
 Tap **● Go live** and just talk. It's a real-time, two-way voice conversation over WebRTC, like a phone call. You can interrupt it mid-sentence, and the orb moves with both voices.

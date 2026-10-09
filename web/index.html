@@ -55,7 +55,7 @@
     <section class="hero" id="hero">
       <span class="eyebrow" id="eyebrow"><i class="dot"></i> Awakening…</span>
       <h1>Ask the <em>Oracle</em></h1>
-      <p>Every book you give it becomes a voice. Speak, and it answers from all of them.</p>
+      <p id="hero-line">Every book you give it becomes a voice. Speak, and it answers from all of them.</p>
     </section>
 
     <section class="answer" id="answer" hidden>
@@ -64,6 +64,7 @@
         <span class="spacer"></span>
         <button class="icon-btn" id="replay" title="Speak again">↻</button>
         <button class="icon-btn" id="toggle-log" title="Transcript">☰</button>
+        <button class="icon-btn" id="close-answer" title="Hide (or tap the Oracle)">✕</button>
       </header>
       <p class="you" id="you"></p>
       <div class="said" id="said"></div>
@@ -71,11 +72,15 @@
     </section>
 
 
+    <button class="pill show-answer" id="show-answer" hidden>▴ Show conversation</button>
+
     <form class="composer" id="ask">
       <textarea id="input" rows="1" placeholder="Speak what is on your heart…" autocomplete="off"></textarea>
       <div class="composer-row">
         <span class="hint" id="hint">It reads what you need. Just speak.</span>
         <span class="spacer"></span>
+        <button type="button" id="attach" class="mic" title="Give it a book">📎</button>
+        <input type="file" id="quick-files" multiple accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm" hidden />
         <button type="button" id="mic" class="mic" title="Speak">🎙</button>
         <button type="submit" class="btn-lime" id="send">Ask <span>↗</span></button>
       </div>
@@ -167,6 +172,11 @@
       </div>
     </div>
   </section>
+
+  <!-- A book's study notes -->
+  <div class="study" id="study" hidden>
+    <div class="study-card"><button class="icon-btn" id="close-study">✕</button><div id="study-body"></div></div>
+  </div>
 
   <!-- Transcript drawer -->
   <aside id="log" class="drawer"><div class="drawer-head"><b>Transcript</b><button class="icon-btn" id="close-log">✕</button></div><div id="log-body"></div></aside>

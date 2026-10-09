@@ -5,6 +5,7 @@ import AdmZip from 'adm-zip';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import * as store from './store.js';
 import * as semantic from './semantic.js';
+import * as study from './study.js';
 
 const CHUNK_WORDS = 220;
 const CHUNK_OVERLAP = 40;
@@ -18,6 +19,23 @@ const STOPWORDS = new Set(
 
 const library = store.loadLibrary();
 let index = buildIndex(library.chunks);
+
+export const getDoc = (id) => library.docs.find((d) => d.id === id);
+
+/** Rebuild a work's full text from its overlapping passages. */
+export function fullText(id) {
+  return library.chunks
+    .filter((c) => c.docId === id)
+    .sort((a, b) => a.i - b.i)
+    .map((c, n) => (n === 0 ? c.text : c.text.split(' ').slice(CHUNK_OVERLAP).join(' ')))
+    .join(' ');
+}
+
+// Every work gets studied in the background (once), and the notes are saved with it.
+study.init({ getDoc, getText: fullText, save: (doc) => store.updateDoc(doc) });
+for (const d of library.docs) {
+  if (!d.study && d.studyStatus !== 'failed' && d.words > 300) study.enqueue(d.id);
+}
 
 // Backfill semantic vectors for any works that don't have them yet.
 for (const d of library.docs) {
@@ -111,10 +129,16 @@ function chunkText(text) {
 }
 
 /** A short spoken-friendly description of the library for the live voice agent. */
+export { brief as studyBrief } from './study.js';
+
 export function overview() {
   if (!library.docs.length) return 'Their library is still empty; draw on broadly known wisdom traditions and say so.';
-  const list = library.docs.slice(-60).map((d) => `${d.title}${d.author ? ` by ${d.author}` : ''}`).join('; ');
-  return `${library.docs.length} works, including: ${list}. Use consult_library to read from them.`;
+  const studied = library.docs.filter((d) => d.study).slice(-20);
+  const rest = library.docs.filter((d) => !d.study).slice(-40).map((d) => `${d.title}${d.author ? ` by ${d.author}` : ''}`);
+  const lines = [`${library.docs.length} works. Use consult_library to read from them.`];
+  if (studied.length) lines.push(`Works you have studied closely:\n${studied.map((d) => `- ${d.title}${d.author ? ` (${d.author})` : ''}: ${d.study.essence.slice(0, 220)}`).join('\n')}`);
+  if (rest.length) lines.push(`Other works: ${rest.join('; ')}`);
+  return lines.join('\n');
 }
 
 export function listDocs() {
@@ -126,6 +150,8 @@ export function stats() {
     works: library.docs.length,
     passages: library.chunks.length,
     semantic: { ...semantic.state, indexedWorks: library.docs.filter((d) => semantic.has(d.id)).length },
+    studied: library.docs.filter((d) => d.studyStatus === 'done').length,
+    studying: library.docs.filter((d) => d.studyStatus === 'queued' || d.studyStatus === 'studying').length,
   };
 }
 
@@ -157,6 +183,7 @@ export async function addDocument({ title, author = '', source = '', type = 'tex
   }
   index = buildIndex(library.chunks);
   semantic.enqueue(id, pieces);
+  if (doc.words > 300) study.enqueue(id);
   return doc;
 }
 
