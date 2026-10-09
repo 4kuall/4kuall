@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Oracle of the Third Eye</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+
+  <header class="top">
+    <button class="ghost" data-open="library" title="Library">☰ Library</button>
+    <div class="sigil">
+      <span class="sigil-eye">◉</span>
+      <span id="lens-name">The Oracle</span>
+      <span id="state-label" class="state-label">resting</span>
+    </div>
+    <div class="top-right">
+      <button class="ghost" data-open="soul" title="Your soul profile">✧ Soul</button>
+      <button class="ghost" data-open="settings" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <!-- What the Oracle is contemplating (summarized reasoning) drifts here. -->
+  <div id="reflections" aria-hidden="true"></div>
+
+  <!-- The spoken words appear like subtitles. -->
+  <section id="utterance" aria-live="polite"></section>
+  <div id="sources"></div>
+
+  <footer class="dock">
+    <div class="lenses" id="lenses"></div>
+    <form id="ask">
+      <button type="button" id="mic" class="mic" title="Speak (hold conversation)">🎙</button>
+      <textarea id="input" rows="1" placeholder="Speak what is on your heart…" autocomplete="off"></textarea>
+      <button type="submit" class="send" title="Send">➤</button>
+    </form>
+    <div class="dock-actions">
+      <button type="button" class="chip" data-prompt="Look at my life as you know it. What do you see that I cannot?">👁 Third-eye vision</button>
+      <button type="button" class="chip" data-prompt="Give me one piece of wisdom for today, drawn from my library, and one small act to embody it.">☀ Today's teaching</button>
+      <button type="button" class="chip" data-prompt="I have a decision to make. Ask me what you need to know, one question at a time.">⚖ Help me decide</button>
+      <button type="button" class="chip" id="toggle-log">📜 Transcript</button>
+    </div>
+  </footer>
+
+  <!-- Transcript -->
+  <aside id="log" class="panel right"><h2>Transcript</h2><div id="log-body"></div></aside>
+
+  <!-- Library -->
+  <aside id="library" class="panel left">
+    <h2>The Library <small id="lib-stats"></small></h2>
+    <p class="muted">Feed the Oracle. Books (PDF, EPUB, TXT, MD, HTML), blog posts, Reddit threads, GitHub repos — anything with words in it.</p>
+    <label class="drop" id="drop">
+      <input type="file" id="files" multiple accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm" hidden />
+      <span>Drop books here or tap to choose</span>
+    </label>
+    <form id="url-form" class="row">
+      <input id="url" type="url" placeholder="https://… blog, reddit, github" />
+      <button>Absorb</button>
+    </form>
+    <details>
+      <summary>Paste a passage or note</summary>
+      <form id="text-form">
+        <input id="text-title" placeholder="Title" />
+        <input id="text-author" placeholder="Author (optional)" />
+        <textarea id="text-body" rows="5" placeholder="Words of wisdom…"></textarea>
+        <button>Absorb</button>
+      </form>
+    </details>
+    <div id="lib-status" class="muted"></div>
+    <ul id="lib-list"></ul>
+  </aside>
+
+  <!-- Soul profile -->
+  <aside id="soul" class="panel right">
+    <h2>Your Soul</h2>
+    <p class="muted">Tell the Oracle who you are. It also learns on its own as you talk.</p>
+    <form id="soul-form">
+      <label>Name<input name="name" /></label>
+      <label>Who you are<textarea name="about" rows="3" placeholder="Your story, work, relationships, season of life…"></textarea></label>
+      <label>What you value<textarea name="values" rows="2"></textarea></label>
+      <label>What you're reaching for<textarea name="goals" rows="2"></textarea></label>
+      <label>What weighs on you<textarea name="struggles" rows="2"></textarea></label>
+      <button>Save</button>
+    </form>
+    <h3>What the Oracle has learned</h3>
+    <div id="traits"></div>
+    <ul id="insights"></ul>
+  </aside>
+
+  <!-- Settings -->
+  <aside id="settings" class="panel right">
+    <h2>Settings</h2>
+    <label class="toggle"><input type="checkbox" id="voice-on" checked /> Speak aloud</label>
+    <label class="toggle"><input type="checkbox" id="handsfree" /> Hands-free conversation (listen again after speaking)</label>
+    <label>ElevenLabs voice<select id="voice-select"><option value="">Server default</option></select></label>
+    <label>Browser voice (fallback)<select id="browser-voice"></select></label>
+    <label>Access token (if server requires one)<input id="token" type="password" /></label>
+    <div id="status" class="muted"></div>
+    <button id="forget" class="danger">Forget our conversation</button>
+  </aside>
+
+  <div id="veil" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

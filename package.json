@@ -1,0 +1,31 @@
+{
+  "name": "oracle-of-the-third-eye",
+  "version": "1.0.0",
+  "description": "A wisdom oracle that speaks from the books you give it",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/4kuall/4kuall.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/4kuall/4kuall/issues"
+  },
+  "homepage": "https://github.com/4kuall/4kuall#readme",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.1",
+    "adm-zip": "^0.6.1",
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "multer": "^2.4.0",
+    "pdf-parse": "^1.1.1"
+  }
+}
