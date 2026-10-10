@@ -29,6 +29,8 @@ Cost: one study per book, billed to your Anthropic account. A typical 100k-word 
 
 After every conversation it writes itself a private note, records something it is now wondering about you, and drafts what it will say when you next return. That draft appears on the home screen and is the first thing it says in a live call. This is continuity built from memory. It's designed to feel like a presence that remembers and thinks about you. It is not consciousness, and the Oracle is instructed to be honest about that if asked.
 
+The Oracle is drawn as a crystal globe with living light moving inside it, and a physically lit eye set into its face. The eye is a real 3D eyeball with a wet-looking white, a clear cornea that bends light over the iris, and eyelids that close over it, all reflecting a studio light environment.
+
 The eye runs on a small attention system:
 - quick darting glances with tiny tremors while it fixes on something, the head following the eyes
 - blinks at a human rate, including occasional double blinks
