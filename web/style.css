@@ -270,3 +270,6 @@ body.is-live .hint::before { content: '● '; }
 .study-card .muted { color: var(--muted); font-size: .88rem; }
 .hero p.opening { font-family: var(--body); font-style: italic; color: var(--ink); font-size: 1.08rem; max-width: 520px; }
 @media (min-width: 700px) { .study { place-items: center; } }
+
+.backup-btn { display: inline-flex; justify-content: center; margin: 14px 8px 0 0; text-decoration: none; cursor: pointer; font-size: .9rem; }
+.form label.backup-btn { color: var(--ink); }

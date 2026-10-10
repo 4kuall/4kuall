@@ -889,6 +889,39 @@ function fillBrowserVoices() {
   for (const v of speechSynthesis.getVoices()) sel.append(new Option(`${v.name} (${v.lang})`, v.name, false, v.name === settings.browserVoice));
 }
 if ('speechSynthesis' in window) { fillBrowserVoices(); speechSynthesis.onvoiceschanged = fillBrowserVoices; }
+// Backup: fetch with the passcode, then hand the file to the browser to save.
+$('#backup').onclick = async (e) => {
+  e.preventDefault();
+  toast('#backup-status', 'Preparing your backup…');
+  try {
+    const blob = await (await api('/api/backup')).blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `oracle-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('#backup-status', 'Saved. Keep this file somewhere safe (e.g. iCloud Drive or Google Drive).');
+  } catch (err) {
+    toast('#backup-status', err.message, true);
+  }
+};
+$('#restore').onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  toast('#backup-status', 'Restoring…');
+  const fd = new FormData();
+  fd.append('backup', file);
+  try {
+    const r = await getJSON('/api/backup/restore', { method: 'POST', body: fd });
+    toast('#backup-status', `Restored ${r.added} work(s) and your memory.`);
+    refreshLibrary();
+    refreshSoul();
+  } catch (err) {
+    toast('#backup-status', err.message, true);
+  }
+};
+
 $('#forget').onclick = async () => {
   if (!confirm('Forget the conversation history? (Your soul profile and library stay.)')) return;
   await api('/api/history', { method: 'DELETE' });

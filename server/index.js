@@ -14,13 +14,16 @@ const oracle = await import('./oracle.js');
 const app = express();
 app.set('trust proxy', 1);
 // Cloud hosts poll this to know the server is alive.
-app.get('/healthz', (req, res) => {
+app.get('/healthz', async (req, res) => {
   if (req.query.details === undefined) return res.send('ok');
+  // Touch the database so a daily check keeps a free Supabase project from pausing.
+  const dbAlive = await store.ping().catch(() => false);
   // Setup diagnostics only: which services are configured and whether memory works.
   // No secrets, no personal data — safe to expose without the passcode.
   res.json({
     storage: store.mode,
     storageError: store.storageError,
+    dbAlive,
     claude: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
     elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
     liveAgent: Boolean(process.env.ELEVENLABS_AGENT_ID),
@@ -129,6 +132,25 @@ app.delete('/api/library/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- Backup & restore (your own copy, independent of any hosting) ----------
+app.get('/api/backup', (_req, res) => {
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Disposition', `attachment; filename="oracle-backup-${stamp}.json"`);
+  res.json({ app: 'oracle-third-eye', version: 1, createdAt: new Date().toISOString(), ...library.exportAll(), profile: oracle.getProfile(), history: oracle.getHistory() });
+});
+
+app.post('/api/backup/restore', upload.single('backup'), async (req, res) => {
+  try {
+    const data = JSON.parse(req.file?.buffer.toString('utf8') || '{}');
+    if (data.app !== 'oracle-third-eye') throw new Error('That file is not an Oracle backup.');
+    const added = await library.restore(data);
+    oracle.restoreMemory(data);
+    res.json({ added });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

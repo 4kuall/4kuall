@@ -28,6 +28,22 @@ export function setProfile(patch) {
 }
 
 export const getHistory = () => history;
+/** Restore memory from a backup: fills an empty profile/history, merges learned insights otherwise. */
+export function restoreMemory(backup) {
+  if (backup.profile && typeof backup.profile === 'object') {
+    const empty = !profile.name && !profile.about && !profile.insights.length;
+    if (empty) profile = { ...DEFAULT_PROFILE, ...backup.profile };
+    else {
+      profile.insights = [...new Set([...(backup.profile.insights || []), ...profile.insights])].slice(-60);
+      profile.journal = [...(backup.profile.journal || []), ...(profile.journal || [])].slice(-40);
+    }
+    save('profile', profile);
+  }
+  if (Array.isArray(backup.history) && !history.length) {
+    history = backup.history.slice(-400);
+    save('history', history);
+  }
+}
 export function clearHistory() {
   history = [];
   save('history', history);

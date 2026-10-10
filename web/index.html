@@ -166,7 +166,10 @@
         <label class="check"><input type="checkbox" id="ambience-on" /> Ambient soundscape</label>
       </div>
       <div class="card form">
-        <b>Access & memory</b><small>For when you host it beyond localhost</small>
+        <b>Access & memory</b><small>Keep your own copy of everything the Oracle knows</small>
+        <a class="btn-lime backup-btn" id="backup" href="/api/backup">⇩ Download backup</a>
+        <label class="btn-ghost backup-btn">⇧ Restore from backup<input type="file" id="restore" accept=".json,application/json" hidden /></label>
+        <div class="toast" id="backup-status"></div>
         <label>Access token<input id="token" type="password" placeholder="Matches ACCESS_TOKEN on the server" /></label>
         <button class="btn-ghost danger" id="forget">Forget our conversation</button>
       </div>

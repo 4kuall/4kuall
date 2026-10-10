@@ -187,6 +187,35 @@ export async function addDocument({ title, author = '', source = '', type = 'tex
   return doc;
 }
 
+/** Everything needed to rebuild the library elsewhere (search vectors are recomputed). */
+export function exportAll() {
+  return { docs: library.docs, chunks: library.chunks };
+}
+
+/** Add works from a backup; works already present (same id) are skipped. */
+export async function restore({ docs = [], chunks = [] }) {
+  let added = 0;
+  for (const doc of docs) {
+    if (!doc?.id || getDoc(doc.id)) continue;
+    const mine = chunks.filter((c) => c.docId === doc.id).map((c) => ({ docId: doc.id, i: c.i, text: String(c.text) }));
+    if (!mine.length) continue;
+    library.docs.push(doc);
+    library.chunks.push(...mine);
+    try {
+      await store.putDoc(doc, mine);
+    } catch (err) {
+      library.docs = library.docs.filter((d) => d.id !== doc.id);
+      library.chunks = library.chunks.filter((c) => c.docId !== doc.id);
+      throw err;
+    }
+    semantic.enqueue(doc.id, mine.map((c) => c.text));
+    if (!doc.study && doc.words > 300) study.enqueue(doc.id);
+    added++;
+  }
+  if (added) index = buildIndex(library.chunks);
+  return added;
+}
+
 export async function removeDocument(id) {
   semantic.remove(id);
   library.docs = library.docs.filter((d) => d.id !== id);

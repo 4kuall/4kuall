@@ -269,6 +269,13 @@ export async function deleteDoc(id) {
 
 // ---------- semantic vectors ----------
 
+/** A tiny query so the database registers activity (keeps free Supabase projects awake). */
+export async function ping() {
+  if (mode !== 'supabase' || !pool) return false;
+  await pool.query('select 1');
+  return true;
+}
+
 export function loadVectors() {
   return vectors;
 }
