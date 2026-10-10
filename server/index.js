@@ -14,7 +14,20 @@ const oracle = await import('./oracle.js');
 const app = express();
 app.set('trust proxy', 1);
 // Cloud hosts poll this to know the server is alive.
-app.get('/healthz', (_req, res) => res.send('ok'));
+app.get('/healthz', (req, res) => {
+  if (req.query.details === undefined) return res.send('ok');
+  // Setup diagnostics only: which services are configured and whether memory works.
+  // No secrets, no personal data — safe to expose without the passcode.
+  res.json({
+    storage: store.mode,
+    storageError: store.storageError,
+    claude: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+    elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
+    liveAgent: Boolean(process.env.ELEVENLABS_AGENT_ID),
+    passcodeSet: Boolean(process.env.ACCESS_TOKEN),
+    commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7),
+  });
+});
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 * 1024 * 1024 } });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.resolve('web')));
