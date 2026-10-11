@@ -72,7 +72,8 @@ $('#lock-form').onsubmit = async (e) => {
     $('#token').value = settings.token;
     location.reload();
   } else {
-    $('#lock-msg').textContent = 'That is not the passcode.';
+    const why = res.status === 429 ? (await res.json().catch(() => ({}))).error : '';
+    $('#lock-msg').textContent = why || 'That is not the passcode.';
     $('#lock-input').select();
   }
 };

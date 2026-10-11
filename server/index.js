@@ -44,6 +44,29 @@ app.use(express.static(path.resolve('web')));
 // Passcode gate so you can host it without the world reading your soul.
 // In the cloud (REQUIRE_ACCESS_TOKEN=true) the API stays locked until ACCESS_TOKEN is set.
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
+// A short passcode is easy to guess by trying every combination, so wrong guesses are rationed:
+// 5 per device, then a 15-minute wait; and if wrong guesses pile up from many devices (over 60
+// in an hour), new devices wait an hour. Devices that have already unlocked are never blocked.
+const guesses = new Map(); // ip -> { fails, until }
+const trusted = new Set(); // ips that entered the right passcode since the server started
+let wave = { fails: 0, since: Date.now(), until: 0 };
+function guessBlocked(ip) {
+  const now = Date.now();
+  const g = guesses.get(ip);
+  if (g?.until > now) return Math.ceil((g.until - now) / 60000);
+  if (!trusted.has(ip) && wave.until > now) return Math.ceil((wave.until - now) / 60000);
+  return 0;
+}
+function wrongGuess(ip) {
+  const now = Date.now();
+  const g = guesses.get(ip) || { fails: 0, until: 0 };
+  g.fails += 1;
+  if (g.fails >= 5) { g.fails = 0; g.until = now + 15 * 60000; }
+  guesses.set(ip, g);
+  if (now - wave.since > 3600000) wave = { fails: 0, since: now, until: wave.until };
+  if (++wave.fails > 60) wave.until = now + 3600000;
+  if (guesses.size > 5000) guesses.clear();
+}
 app.use('/api', (req, res, next) => {
   const secret = process.env.ACCESS_TOKEN;
   if (!secret) {
@@ -52,7 +75,14 @@ app.use('/api', (req, res, next) => {
   }
     // Header normally; ?t= only for the transcript beacon sent as the page closes (beacons can't set headers).
   const given = req.get('x-access-token') || (req.path === '/live/transcript' ? req.query.t : '') || '';
-  if (crypto.timingSafeEqual(sha(given), sha(secret))) return next();
+  const wait = guessBlocked(req.ip);
+  if (wait) return res.status(429).json({ error: `Too many wrong passcodes. Try again in ${wait} minute${wait === 1 ? '' : 's'}.`, locked: true });
+  if (crypto.timingSafeEqual(sha(given), sha(secret))) {
+    trusted.add(req.ip);
+    guesses.delete(req.ip);
+    return next();
+  }
+  if (given) wrongGuess(req.ip); // an empty passcode (a fresh device) isn't a guess
   res.status(401).json({ error: 'Passcode required.', locked: true });
 });
 
