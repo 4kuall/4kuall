@@ -3,7 +3,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { load, save, DEFAULT_PROFILE } from './store.js';
 import { search, stats, getDoc, studyBrief, overview as libraryOverview } from './library.js';
 
-const MODEL = process.env.ORACLE_MODEL || 'claude-opus-5-5';
+const MODEL = process.env.ORACLE_MODEL || 'claude-haiku-5-5';
+// Haiku has no server-side refusal fallback and takes the basic web search tool.
+const IS_HAIKU = /haiku/.test(MODEL);
 const MEMORY_MODEL = process.env.MEMORY_MODEL || MODEL;
 const MAX_HISTORY_TURNS = 24;
 
@@ -146,7 +148,7 @@ export async function converse({ message }, emit) {
 
   const messages = toMessages(buildTurn(message, passages));
   // Claude's server-side web search, always available; the Oracle decides when it's needed.
-  const tools = process.env.WEB_SEARCH === 'off' ? undefined : [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }];
+  let tools = process.env.WEB_SEARCH === 'off' ? undefined : [{ type: IS_HAIKU ? 'web_search_20250305' : 'web_search_20260209', name: 'web_search', max_uses: 3 }];
 
   let text = '';
   let final;
@@ -155,8 +157,7 @@ export async function converse({ message }, emit) {
     const stream = anthropic().beta.messages.stream({
       model: MODEL,
       max_tokens: 16000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
+      ...(!IS_HAIKU && { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }),
       thinking: { type: 'adaptive', display: 'summarized' },
       output_config: { effort: process.env.ORACLE_EFFORT || 'medium' },
       cache_control: { type: 'ephemeral' },
@@ -165,21 +166,32 @@ export async function converse({ message }, emit) {
       messages,
     });
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_start' && event.content_block.type === 'server_tool_use') {
-        emit('searching', true);
-      } else if (event.type === 'content_block_start' && event.content_block.type === 'web_search_tool_result') {
-        const results = Array.isArray(event.content_block.content) ? event.content_block.content : [];
-        emit('web', results.slice(0, 5).map((r) => ({ title: r.title, url: r.url })));
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'thinking_delta') emit('reflection', event.delta.thinking);
-        else if (event.delta.type === 'text_delta') {
-          text += event.delta.text;
-          emit('text', event.delta.text);
+    try {
+      for await (const event of stream) {
+        if (event.type === 'content_block_start' && event.content_block.type === 'server_tool_use') {
+          emit('searching', true);
+        } else if (event.type === 'content_block_start' && event.content_block.type === 'web_search_tool_result') {
+          const results = Array.isArray(event.content_block.content) ? event.content_block.content : [];
+          emit('web', results.slice(0, 5).map((r) => ({ title: r.title, url: r.url })));
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'thinking_delta') emit('reflection', event.delta.thinking);
+          else if (event.delta.type === 'text_delta') {
+            text += event.delta.text;
+            emit('text', event.delta.text);
+          }
         }
       }
+      final = await stream.finalMessage();
+    } catch (err) {
+      // If this model rejects the web search tool, answer without it rather than fail.
+      if (tools && !text && err instanceof Anthropic.BadRequestError && /tool|web_search/i.test(err.message)) {
+        console.warn('[oracle] web search unavailable for', MODEL, '-', err.message);
+        tools = undefined;
+        round--;
+        continue;
+      }
+      throw err;
     }
-    final = await stream.finalMessage();
     if (final.stop_reason !== 'pause_turn') break;
     messages.push({ role: 'assistant', content: final.content });
   }
@@ -244,7 +256,7 @@ Return ONLY a JSON object:
 
   const res = await anthropic().messages.create({
     model: MEMORY_MODEL,
-    max_tokens: 2000,
+    max_tokens: 4000, // thinking counts toward this
     output_config: { effort: 'low' },
     messages: [{ role: 'user', content: prompt }],
   });

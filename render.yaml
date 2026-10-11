@@ -27,3 +27,7 @@ services:
         value: pqHfZKP75CvOlQylNhV4
       - key: ELEVENLABS_AGENT_ID # live conversation agent in your ElevenLabs account
         value: agent_4301m4gaggbzf5et5ma61brmra58
+      - key: ORACLE_MODEL # fast and inexpensive; claude-opus-5-5 for deeper (costlier) answers
+        value: claude-haiku-5-5
+      - key: SEMANTIC_SEARCH # the local embedding model needs ~900 MB; the free plan has 512 MB
+        value: "off"

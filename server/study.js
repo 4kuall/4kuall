@@ -4,7 +4,7 @@
 // passages worth quoting. Quotes are kept only if they appear verbatim in the text.
 import Anthropic from '@anthropic-ai/sdk';
 
-const MODEL = process.env.STUDY_MODEL || process.env.ORACLE_MODEL || 'claude-opus-5-5';
+const MODEL = process.env.STUDY_MODEL || process.env.ORACLE_MODEL || 'claude-haiku-5-5';
 const MAX_CHARS = Number(process.env.STUDY_MAX_CHARS || 1_200_000); // ~300k tokens
 export const enabled = process.env.STUDY_BOOKS !== 'off';
 
@@ -72,7 +72,7 @@ Return ONLY a JSON object:
 
   const stream = client.messages.stream({
     model: MODEL,
-    max_tokens: 8000,
+    max_tokens: 16000, // room for thinking (on by default) plus the notes
     output_config: { effort: 'low' },
     messages: [{ role: 'user', content: prompt }],
   });

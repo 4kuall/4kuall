@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
@@ -29,9 +30,14 @@ app.get('/healthz', async (req, res) => {
     liveAgent: Boolean(process.env.ELEVENLABS_AGENT_ID),
     passcodeSet: Boolean(process.env.ACCESS_TOKEN),
     commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7),
+    model: process.env.ORACLE_MODEL || 'claude-haiku-5-5',
+    memoryMB: Math.round(process.memoryUsage().rss / 1048576),
+    semantic: library.stats().semantic.enabled ? 'on' : 'off',
   });
 });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 * 1024 * 1024 } });
+// Books go to a temp folder and are read one at a time, so 50 large files never sit in memory together.
+const bookUpload = multer({ dest: path.join(os.tmpdir(), 'oracle-uploads'), limits: { fileSize: 80 * 1024 * 1024 } });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.resolve('web')));
 
@@ -63,7 +69,7 @@ app.get('/api/status', (_req, res) => {
     live: Boolean(process.env.ELEVENLABS_API_KEY && AGENT_ID),
     library: lib,
     integrations: [
-      { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? process.env.ORACLE_MODEL || 'claude-opus-5-5' : 'Set ANTHROPIC_API_KEY' },
+      { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? process.env.ORACLE_MODEL || 'claude-haiku-5-5' : 'Set ANTHROPIC_API_KEY' },
       { id: 'websearch', name: 'Web Search', role: 'Live knowledge beyond your library', connected: claude, detail: 'Automatic — the Oracle searches only when it needs to' },
       { id: 'live', name: 'Live conversation', role: 'Real-time voice · Eleven v4 Turbo · interruptible', connected: eleven && Boolean(AGENT_ID), detail: eleven && AGENT_ID ? 'Tap "Go live" to talk' : 'Set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID' },
       { id: 'elevenlabs', name: 'ElevenLabs', role: 'Voice out · speech-to-text in', connected: eleven, detail: eleven ? 'Voice + Scribe STT' : 'Set ELEVENLABS_API_KEY (browser voice used meanwhile)' },
@@ -78,15 +84,17 @@ app.get('/api/status', (_req, res) => {
 // ---------- Library ----------
 app.get('/api/library', (_req, res) => res.json(library.listDocs()));
 
-app.post('/api/library/upload', upload.array('files', 50), async (req, res) => {
+app.post('/api/library/upload', bookUpload.array('files', 50), async (req, res) => {
   const added = [];
   const failed = [];
   for (const file of req.files || []) {
     try {
-      const r = await library.extractFromFile(file);
+      const r = await library.extractFromFile({ ...file, buffer: await fs.promises.readFile(file.path) });
       added.push(await library.addDocument({ ...r, author: req.body.author || r.author, source: file.originalname }));
     } catch (err) {
       failed.push({ name: file.originalname, error: err.message });
+    } finally {
+      fs.promises.unlink(file.path).catch(() => {});
     }
   }
   res.json({ added, failed });

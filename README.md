@@ -141,13 +141,13 @@ On a Mac or Linux: `cp .env.example .env`, add your keys, then `npm install && n
 | Variable | Purpose |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Required. The Oracle's mind |
-| `ORACLE_MODEL` | Defaults to `claude-opus-5-5` |
+| `ORACLE_MODEL` | Defaults to `claude-haiku-5-5` (fast and inexpensive). Set `claude-opus-5-5` for deeper but costlier answers |
 | `ORACLE_EFFORT` | `low` / `medium` (default) / `high`. Higher is slower and deeper |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | Optional realistic voice. Pick or design a deep, warm voice in ElevenLabs. Settings also lists your voices |
 | `DATABASE_URL` | Supabase (or any Postgres) connection string. Without it, data stays in `./data` on this machine |
 | `ACCESS_TOKEN` | The passcode. Required in the cloud (`REQUIRE_ACCESS_TOKEN=true` keeps the API locked until it's set) |
 | `WEB_SEARCH` | Set to `off` to stop the Oracle from searching the web |
-| `SEMANTIC_SEARCH` | Set to `off` on very small servers. The model uses about 300 MB of RAM |
+| `SEMANTIC_SEARCH` | `on` / `off`. By default it turns itself on only when the server has about 900 MB of memory or more, and stays off on Render's free plan (512 MB). When it's off, keyword search plus each book's study notes find passages |
 
 ## Honest limits
 
