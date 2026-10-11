@@ -196,7 +196,7 @@ app.post('/api/chat', async (req, res) => {
 // "consult_library" tool with passages from your library.
 const AGENT_ID = process.env.ELEVENLABS_AGENT_ID || '';
 
-app.get('/api/live/start', async (_req, res) => {
+app.get('/api/live/start', async (req, res) => {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key || !AGENT_ID) return res.status(501).json({ error: 'Live conversation needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID on the server.' });
   const r = await fetch(`https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${encodeURIComponent(AGENT_ID)}`, {
@@ -218,7 +218,9 @@ app.get('/api/live/start', async (_req, res) => {
   res.json({
     conversationToken: token,
     dynamicVariables: {
-      greeting: p.opening || (p.name ? `${p.name}. I'm here. What's on your heart?` : "I'm here. What's on your heart?"),
+      greeting: p.opening || (req.query.lang === 'ru'
+        ? (p.name ? `${p.name}. Я здесь. Что у тебя на сердце?` : 'Я здесь. Что у тебя на сердце?')
+        : (p.name ? `${p.name}. I'm here. What's on your heart?` : "I'm here. What's on your heart?")),
       profile: oracle.profileBlock().slice(0, 6000),
       library_overview: library.overview().slice(0, 3000),
     },
@@ -285,6 +287,8 @@ app.post('/api/stt', upload.single('audio'), async (req, res) => {
   const fd = new FormData();
   fd.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
   fd.append('file', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' }), 'speech.webm');
+  // Scribe detects the language by itself; only pin it when English or Russian was chosen.
+  if (['en', 'ru'].includes(req.body.language)) fd.append('language_code', req.body.language);
   const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', { method: 'POST', headers: { 'xi-api-key': key }, body: fd });
   if (!r.ok) return res.status(r.status).json({ error: await r.text() });
   const data = await r.json();

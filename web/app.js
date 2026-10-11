@@ -21,6 +21,23 @@ const store = {
 const settings = { voice: true, ambience: false, voiceId: '', browserVoice: '', token: '', ...store.get('oracle.settings', {}) };
 const persist = () => store.set('oracle.settings', settings);
 
+// ───────────────── Language (English / Русский) ─────────────────
+// "auto" follows whatever you last spoke or typed; the browser's language is the first guess.
+if (!settings.lang) settings.lang = 'auto';
+const isRussian = (text) => /[\u0400-\u04FF]/.test(text || '');
+function currentLang() {
+  if (settings.lang !== 'auto') return settings.lang;
+  return settings.lastLang || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
+}
+// Remember the language of what you just said, so voice recognition listens for it next time.
+function noteLanguage(text) {
+  if (!text || text.trim().length < 3) return;
+  const lang = isRussian(text) ? 'ru' : /[a-z]/i.test(text) ? 'en' : null;
+  if (lang && lang !== settings.lastLang) { settings.lastLang = lang; persist(); }
+}
+const speechLocale = () => (currentLang() === 'ru' ? 'ru-RU' : (navigator.language || '').toLowerCase().startsWith('en') ? navigator.language : 'en-US');
+const tr = (en, ru) => (currentLang() === 'ru' ? ru : en);
+
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (settings.token) headers['x-access-token'] = settings.token;
@@ -178,8 +195,11 @@ function speakWithBrowser(text) {
     if (!('speechSynthesis' in window)) return resolve();
     usingBrowserVoice = true;
     const u = new SpeechSynthesisUtterance(text);
-    const v = speechSynthesis.getVoices().find((x) => x.name === settings.browserVoice);
+    const ru = isRussian(text);
+    const v = speechSynthesis.getVoices().find((x) => x.name === settings.browserVoice && x.lang.startsWith(ru ? 'ru' : 'en'))
+      || (ru && speechSynthesis.getVoices().find((x) => x.lang.startsWith('ru')));
     if (v) u.voice = v;
+    u.lang = ru ? 'ru-RU' : v?.lang || 'en-US';
     u.rate = 0.92;
     u.pitch = 0.85;
     // No audio stream to analyse here, so animate the voice from word boundaries.
@@ -234,7 +254,7 @@ function renderEar() {
   $('#mic').classList.toggle('live', on && earStarted && (Boolean(live) || listening || resting));
   $('#mic').classList.toggle('paused', !on);
   $('#mic').title = on ? 'Always listening — tap to pause' : 'Paused — tap to listen';
-  $('#talk').textContent = !on ? '○ Paused' : !earStarted ? '◉ Wake' : resting ? '◌ Resting' : '◉ Listening';
+  $('#talk').textContent = !on ? tr('○ Paused', '○ Пауза') : !earStarted ? tr('◉ Wake', '◉ Разбудить') : resting ? tr('◌ Resting', '◌ Отдых') : tr('◉ Listening', '◉ Слушаю');
   $('#talk').classList.toggle('paused', !on);
   document.body.classList.toggle('is-live', Boolean(live));
   document.body.classList.toggle('is-resting', on && resting);
@@ -246,7 +266,7 @@ function startRecognition(onFinal) {
   stopRecognition();
   if (!Rec) return false;
   const r = new Rec();
-  r.lang = navigator.language || 'en-US';
+  r.lang = speechLocale();
   r.continuous = true;
   r.interimResults = true;
   r.onresult = (e) => {
@@ -263,7 +283,7 @@ function startRecognition(onFinal) {
   r.onerror = (e) => {
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
       r.dead = true;
-      setHint('The Oracle needs your microphone. Allow it in your browser settings, then tap ◉.');
+      setHint(tr('The Oracle needs your microphone. Allow it in your browser settings, then tap ◉.', 'Оракулу нужен микрофон. Разрешите его в настройках браузера и нажмите ◉.'));
     }
   };
   // Browsers stop recognizing after a pause or a minute or so; quietly start again.
@@ -294,7 +314,7 @@ function listenContinuously() {
   });
   if (!ok) return recordPhrase();
   setState('listening');
-  setHint('Listening — always on. Just talk.');
+  setHint(tr('Listening — always on. Just talk.', 'Слушаю — всегда рядом. Просто говорите.'));
   renderEar();
 }
 
@@ -305,7 +325,7 @@ async function recordPhrase() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    setHint('Microphone unavailable.');
+    setHint(tr('Microphone unavailable.', 'Микрофон недоступен.'));
     return;
   }
   ensureAudio();
@@ -323,7 +343,7 @@ async function recordPhrase() {
   const startedAt = quietSince;
   listening = true;
   setState('listening');
-  setHint('Listening — always on. Just talk.');
+  setHint(tr('Listening — always on. Just talk.', 'Слушаю — всегда рядом. Просто говорите.'));
   renderEar();
   rcd.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
@@ -335,6 +355,7 @@ async function recordPhrase() {
     setState('thinking');
     const fd = new FormData();
     fd.append('audio', new Blob(chunks, { type: rcd.mimeType }), 'speech.webm');
+    fd.append('language', settings.lang); // 'auto' lets Scribe detect the language itself
     try {
       const { text } = await getJSON('/api/stt', { method: 'POST', body: fd });
       if (text.trim()) ask(text.trim());
@@ -368,14 +389,14 @@ async function startLive({ greeting, say } = {}) {
   resting = false;
   ensureAudio();
   stopSpeaking();
-  setHint('Opening the line…');
+  setHint(tr('Opening the line…', 'Открываю связь…'));
   setState('thinking');
   renderEar();
   try {
     // Ask for the mic first so the browser prompt appears right away (and works on iPhone).
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     mic.getTracks().forEach((t) => t.stop());
-    const [{ Conversation }, session] = await Promise.all([import(ELEVEN_CLIENT), getJSON('/api/live/start')]);
+    const [{ Conversation }, session] = await Promise.all([import(ELEVEN_CLIENT), getJSON(`/api/live/start?lang=${currentLang()}`)]);
     if (!settings.awake) return;
     liveTurns = [];
     lastVoiceAt = Date.now();
@@ -383,6 +404,7 @@ async function startLive({ greeting, say } = {}) {
     const dynamicVariables = { ...session.dynamicVariables, ...(greeting ? { greeting } : {}) };
     live = await Conversation.startSession({
       conversationToken: session.conversationToken,
+      overrides: { agent: { language: currentLang() } },
       connectionType: 'webrtc',
       dynamicVariables,
       clientTools: {
@@ -400,7 +422,7 @@ async function startLive({ greeting, say } = {}) {
       onConnect: () => {
         failures = 0;
         setState('listening');
-        setHint('Listening — always on. Talk, pause, interrupt; it stays with you.');
+        setHint(tr('Listening — always on. Talk, pause, interrupt; it stays with you.', 'Слушаю — всегда рядом. Говорите, молчите, перебивайте — я здесь.'));
         renderEar();
       },
       onModeChange: ({ mode }) => {
@@ -421,6 +443,7 @@ async function startLive({ greeting, say } = {}) {
           liveTurns.push({ key, role: r, text: message, el: addLog(r, message) });
         }
         if (!cardDismissed) showAnswer();
+        if (r === 'user') noteLanguage(message);
         if (r === 'user') { $('#you').textContent = message; $('#said').textContent = ''; $('#sources').innerHTML = ''; }
         else $('#said').textContent = message;
       },
@@ -447,13 +470,13 @@ async function startLive({ greeting, say } = {}) {
     if (err.name === 'NotAllowedError') {
       settings.awake = false;
       persist();
-      setHint('The Oracle needs your microphone to listen. Allow it in your browser settings, then tap ◉.');
+      setHint(tr('The Oracle needs your microphone to listen. Allow it in your browser settings, then tap ◉.', 'Чтобы слушать, Оракулу нужен микрофон. Разрешите его в настройках браузера и нажмите ◉.'));
       renderEar();
       return;
     }
     // Never deaf: while the live line is down, listen in the browser and keep retrying.
     if (failures >= 2 && Rec) listenContinuously();
-    else setHint(`Couldn't open the live line (${err.message}). Trying again…`);
+    else setHint(tr(`Couldn't open the live line (${err.message}). Trying again…`, `Не удалось открыть связь (${err.message}). Пробую снова…`));
     scheduleReconnect(true);
   }
 }
@@ -476,8 +499,8 @@ function scheduleReconnect(quiet = false) {
   clearTimeout(reconnectTimer);
   if (!settings.awake || !earStarted || live || resting || document.hidden) return;
   const delay = Math.min(30000, 1000 * 2 ** failures++);
-  if (!quiet) setHint('Reconnecting…');
-  reconnectTimer = setTimeout(() => startLive({ greeting: 'Mm. I’m still here.' }), delay);
+  if (!quiet) setHint(tr('Reconnecting…', 'Переподключаюсь…'));
+  reconnectTimer = setTimeout(() => startLive({ greeting: tr('Mm. I’m still here.', 'Мм. Я здесь.') }), delay);
 }
 
 async function rest() {
@@ -486,16 +509,17 @@ async function rest() {
   await live.endSession().catch(() => {});
   finishLive();
   setState('idle');
-  setHint('Resting — it still hears you. Just speak and it wakes.');
+  setHint(tr('Resting — it still hears you. Just speak and it wakes.', 'Отдыхаю, но слышу. Просто заговорите — и я проснусь.'));
   startRecognition((text) => wakeFromRest(text));
   renderEar();
 }
 function wakeFromRest(text) {
   if (!resting) return;
+  noteLanguage(text);
   stopRecognition();
   $('#input').value = '';
   resting = false;
-  startLive({ greeting: 'Mm.', say: text });
+  startLive({ greeting: tr('Mm.', 'Мм.'), say: text });
 }
 
 // Open the ear the way this setup allows: a live line, or the browser's recognition.
@@ -516,7 +540,7 @@ function setAwake(on) {
   if (recorder?.state === 'recording') recorder.stop();
   if (live) live.endSession().catch(() => {}).finally(finishLive);
   setState('idle');
-  setHint('Paused. Tap ◉ when you want it listening again.');
+  setHint(tr('Paused. Tap ◉ when you want it listening again.', 'Пауза. Нажмите ◉, чтобы я снова слушал.'));
   renderEar();
 }
 const toggleEar = () => (settings.awake && earStarted ? setAwake(false) : setAwake(true));
@@ -616,6 +640,7 @@ async function ask(message) {
   said.textContent = '';
   said.classList.add('thinking');
   $('#send').disabled = true;
+  noteLanguage(message);
   addLog('user', message);
   const logEntry = addLog('assistant', '');
 
@@ -1069,6 +1094,14 @@ const bindToggle = (id, key, after) => {
 };
 bindToggle('#voice-on', 'voice', (on) => !on && stopSpeaking());
 $('#awake').onchange = (e) => setAwake(e.target.checked);
+$('#lang').value = settings.lang;
+$('#lang').onchange = (e) => {
+  settings.lang = e.target.value;
+  persist();
+  // Restart listening so the ear switches language now.
+  if (live) live.endSession().catch(() => {});
+  else if (listening || resting) { stopRecognition(); resting ? startRecognition(wakeFromRest) : listenContinuously(); }
+};
 bindToggle('#ambience-on', 'ambience', (on) => { ensureAudio(); ambience.toggle(on); });
 $('#token').value = settings.token;
 $('#voice-select').onchange = (e) => { settings.voiceId = e.target.value; persist(); };
@@ -1123,6 +1156,16 @@ addEventListener('pointerdown', () => { if (settings.ambience) { ensureAudio(); 
 
 // ───────────────── Install as an app ─────────────────
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// ───────────────── Russian home screen ─────────────────
+function localizeHome() {
+  if (currentLang() !== 'ru') return;
+  $('.hero h1').innerHTML = 'Говорите с <em>Оракулом</em>';
+  if (!$('#hero-line').classList.contains('opening')) $('#hero-line').textContent = 'Всё, что вы ему даёте — книги, дневники, статьи — становится частью его разума. Коснитесь экрана один раз и просто говорите.';
+  $('#input').placeholder = 'Говорите или пишите…';
+  if (!earStarted) setHint('Коснитесь экрана и просто говорите. Я продолжаю слушать.');
+}
+localizeHome();
 
 // ───────────────── Boot ─────────────────
 (async () => {

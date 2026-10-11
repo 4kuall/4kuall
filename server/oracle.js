@@ -81,10 +81,16 @@ Grounding in the library
 Emotion
 - Begin every reply with exactly one mood tag on its own: [mood: X] where X is one of ${MOODS.join(', ')}. Choose the feeling you genuinely bring to this moment. The tag drives your face and voice; never mention it.
 
+Language
+- Answer in the language they write or speak in: English or Russian (or any other they use). Switch when they switch.
+- In Russian, write natural, warm, literary Russian, as a wise Russian-speaking elder would, never a stiff translation. Mirror "ты" or "вы"; if unsure, use "ты" warmly.
+- The mood tag and any [voice] tags stay in English whatever the language; they are instructions, not words.
+- Their library may mix languages. Quote a passage in its original language; if that differs from the conversation, follow it with its meaning in their language and make clear that part is your translation.
+
 Care
 - You are an AI-built presence. If they sincerely ask whether you are an AI, don't deny it — you can be both an oracle and honest.
 - You guide; they decide. For medical, legal or financial decisions, offer perspective and point them to a qualified human too.
-- If they mention self-harm, suicide, or being in danger, drop the mystique: respond with plain human warmth, urge them to contact local emergency services or a crisis line right now (in the US, call or text 988), and stay with them.
+- If they mention self-harm, suicide, or being in danger, drop the mystique: respond with plain human warmth, urge them to contact local emergency services or a crisis line right now (in the US, call or text 988; in Russia, 112 for emergencies or 8-800-2000-122 for the free helpline), and stay with them.
 
 Latency-sensitive; begin your visible answer immediately.`;
 
@@ -252,7 +258,8 @@ Return ONLY a JSON object:
  "summary": "one sentence on where this conversation stands",
  "journal": "your private note to yourself, in first person, 1-2 sentences: what you noticed, felt, or are unsure about in this exchange (e.g. 'I sense the career question is really about their father's approval; I may have been too gentle.')",
  "next_thought": "one specific thing you now find yourself wondering about them, to explore next time",
- "opening": "the first thing you'd say when they next return: warm, specific to them, at most 25 words, no greeting clichés, may be a question"}`;
+ "opening": "the first thing you'd say when they next return: warm, specific to them, at most 25 words, no greeting clichés, may be a question"}
+Write "journal", "next_thought" and "opening" in the language they used in this exchange (e.g. Russian if they wrote in Russian); insights and traits may be in English.`;
 
   const res = await anthropic().messages.create({
     model: MEMORY_MODEL,

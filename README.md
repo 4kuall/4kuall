@@ -45,6 +45,16 @@ When it speaks, ripples run out from the eye with its real voice. When it thinks
 
 The eye runs on a small attention system. It holds your gaze when listening, follows your pointer, watches you type, and wanders around the room when you go quiet.
 
+## English and Русский
+
+The Oracle speaks English and Russian, and follows whichever one you use.
+- **Typed chat and its voice** answer in the language you write in.
+- **The live conversation** switches language when you do, even mid-call.
+- **Memory notes and its next opening line** are written in your language.
+- **Russian books** are studied with notes in Russian. Search understands Russian word endings, so "любовь" also finds "любовью".
+- **Voice recognition** follows the last language you used. To lock it, go to Integrations → Language / Язык and pick English or Русский.
+- **The home screen** appears in Russian when Russian is active.
+
 ## Live conversation (ElevenLabs Agents)
 
 **Always listening.** Tap anywhere once and it opens a real-time, two-way voice line (WebRTC), then simply keeps listening. You never press a button to talk, and it doesn't hang up because you stopped talking.

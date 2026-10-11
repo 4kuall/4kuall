@@ -62,6 +62,8 @@ ${text}
 ${truncated ? '\n(The book was too long to include completely; this is its first part.)\n' : ''}
 You are a wise guide who will counsel one person using this book. Study it closely and write your private study notes.
 
+Write the notes in the same language as the book (e.g. Russian notes for a Russian book). Passages must stay exactly as written in the book.
+
 Return ONLY a JSON object:
 {"essence": "the heart of this work in 80-150 words, in your own words",
  "key_ideas": ["8-15 distinct ideas, each one sentence, concrete enough to apply"],

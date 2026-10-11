@@ -14,8 +14,25 @@ const STOPWORDS = new Set(
   `a an and are as at be but by for from has have he her his i if in into is it its
   me my of on or our she so that the their them then there these they this to was we
   were what when where which who will with you your not no do does did can could would
-  should about than too very just also been being am all any some more most such only`.split(/\s+/),
+  should about than too very just also been being am all any some more most such only
+  и в во не что он на я с со как а то все она так его но да ты к у же вы за бы по только ее ее мне
+  было вот от меня еще нет о из ему теперь когда даже ну ли если уже или ни быть был него до вас
+  нибудь опять уж вам ведь там потом себя ничего ей может они тут где есть надо ней для мы тебя их
+  чем была сам чтоб без будто чего раз тоже себе под будет ж тогда кто этот того потому этого какой
+  совсем ним здесь этом один почти мой тем чтобы нее сейчас были куда зачем всех никогда можно при
+  наконец два об другой хоть после над больше тот через эти нас про всего них какая много разве три
+  эту моя впрочем хорошо свою этой перед иногда лучше чуть том нельзя такой им более всегда конечно
+  всю между это мой твой её ещё всё`.split(/\s+/).map((w) => w.normalize('NFKD').replace(/\p{M}/gu, '')),
 );
+// Russian words change their endings a lot ("любовь", "любовью", "любовного"). A light stemmer
+// strips one common ending so those forms match. (Runs after й→и, so endings are written with и.)
+const CYRILLIC = /[\u0400-\u04FF]/;
+const RU_ENDING = /(остями|остью|ости|ость|иями|ями|ами|ого|его|ому|ему|ыми|ими|ых|их|ия|ие|ии|ию|ои|еи|ыи|ая|яя|ое|ее|ую|юю|ом|ем|ах|ях|ов|ев|ью|ам|ям|а|я|о|е|и|ы|у|ю|ь)$/;
+function stem(t) {
+  if (!CYRILLIC.test(t)) return t;
+  const cut = t.replace(RU_ENDING, '');
+  return cut.length >= 4 ? cut : t;
+}
 
 const library = store.loadLibrary();
 let index = buildIndex(library.chunks);
@@ -46,9 +63,11 @@ function tokenize(text) {
   return text
     .toLowerCase()
     .normalize('NFKD')
+    .replace(/\p{M}/gu, '') // drop accents and combining marks (ё→е, й→и) so spellings match
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
+    .filter((t) => t.length > 1 && !STOPWORDS.has(t))
+    .map(stem);
 }
 
 function buildIndex(chunks) {
