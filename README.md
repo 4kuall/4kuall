@@ -13,7 +13,7 @@ A private wisdom companion that speaks to you in the combined voice of the autho
 
 ## It studies your books
 
-Give it a book (📎 on the home screen, or the Library tab) and it reads the whole thing in the background, in one pass, using Claude's 1-million-token context. It then writes its own study notes:
+Give it a book, journal or article: drop the file anywhere on the screen, paste it, tap 📎, or paste a link into the message box and it reads the whole thing in the background, in one pass, using Claude's 1-million-token context. It then writes its own study notes:
 - the essence of the book
 - its key ideas
 - how to live them
@@ -29,25 +29,39 @@ Cost: one study per book, billed to your Anthropic account. A typical 100k-word 
 
 After every conversation it writes itself a private note, records something it is now wondering about you, and drafts what it will say when you next return. That draft appears on the home screen and is the first thing it says in a live call. This is continuity built from memory. It's designed to feel like a presence that remembers and thinks about you. It is not consciousness, and the Oracle is instructed to be honest about that if asked.
 
-The Oracle is drawn as a crystal globe with living light moving inside it, and a physically lit eye set into its face. The eye is a real 3D eyeball with a wet-looking white, a clear cornea that bends light over the iris, and eyelids that close over it, all reflecting a studio light environment.
+## What it looks like
 
-The eye runs on a small attention system:
-- quick darting glances with tiny tremors while it fixes on something, the head following the eyes
-- blinks at a human rate, including occasional double blinks
-- lids and pupils that change with its mood
+The Oracle is a surreal digital globe built from tens of thousands of glowing blue points. Continents of light on it drift and slowly reshape. An eye made of the same light sits in its face:
+- a fibrous iris, a dark pupil and a glowing lid line
+- the eye blinks, narrows and widens with its mood
+- the planet turns beneath the eye while the eye keeps looking at you
 
-It holds your gaze when listening, looks up and to the side when thinking, watches you type, follows movement, and starts wondering around the room if you go quiet.
+Around it:
+- **A knowledge network.** Arcs of light pulse between nodes on the globe. The network grows with every work you give it, and a wave of light runs into the eye whenever something new is absorbed.
+- **Data orbits** with bright satellites.
+- **A background** of drifting constellation networks, rising data streams and a holographic grid floor.
+
+When it speaks, ripples run out from the eye with its real voice. When it thinks, the arcs fire faster and it looks up and away.
+
+The eye runs on a small attention system. It holds your gaze when listening, follows your pointer, watches you type, and wanders around the room when you go quiet.
 
 ## Live conversation (ElevenLabs Agents)
 
-Tap **● Go live** and just talk. It's a real-time, two-way voice conversation over WebRTC, like a phone call. You can interrupt it mid-sentence, and the orb moves with both voices.
+**Always listening.** Tap anywhere once and it opens a real-time, two-way voice line (WebRTC), then simply keeps listening. You never press a button to talk, and it doesn't hang up because you stopped talking.
+- **It stays quiet with you.** It can stay silent during your pauses and won't ask "are you still there?".
+- **It reconnects by itself.** If the line drops (network, or the 30-minute session cap), it reopens it automatically. If it can't, it listens through the browser meanwhile.
+- **It rests to save credits.** After about 4 quiet minutes it closes the paid line, and your browser's own speech recognition keeps listening. When you speak, it reopens the line and answers what you said. (Browsers whose speech recognition can't do this keep the line open instead.)
+- **Pause and resume.** Tap ◉ to pause and again to resume. Your choice is remembered.
+- **Talk over it.** You can interrupt it mid-sentence, and the globe moves with both voices.
 
 - **Voice:** `eleven_v4_turbo`, ElevenLabs' newest real-time model, using "Bill – Wise, Mature, Balanced".
 - **Brain:** Claude Sonnet 5.5 at low reasoning effort, running inside the ElevenLabs agent. It's a fast model, chosen because a spoken reply has to start within about a second. You can switch it to Claude Opus 5.5 in the ElevenLabs dashboard (Agents → Oracle of the Third Eye → LLM) if you'd trade speed for depth.
 - **It knows you:** your Soul profile and library list are passed in when each call starts. A `consult_library` tool lets it read passages from your library mid-conversation.
 - **It remembers:** the transcript is saved to your history when the call ends, and the Oracle keeps learning from it, the same as typed chats.
 - **The agent is already set up** in your ElevenLabs account as **Oracle of the Third Eye** (`agent_4301m4gaggbzf5et5ma61brmra58`). It's private, so only your server can start a call, and it's capped at 2 simultaneous calls and 100 a day to protect your credits. Change any of this in the ElevenLabs dashboard.
-- **Needs:** `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` on the server. Without them, the mic button falls back to the older speak-then-wait mode.
+- **Needs:** `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` on the server. Without them it still listens continuously, using the browser's speech recognition, and answers with the regular voice.
+- **Cost.** An open line uses ElevenLabs Agents minutes. ElevenLabs appears to bill quiet stretches at a discount, but I'm not certain of the current rates, so check elevenlabs.io/pricing. Resting after quiet minutes is there to keep this down.
+- **Privacy.** Always listening means the mic is on while the page is open. In Chrome, browser speech recognition sends audio to Google's servers. Tap ◉ to pause whenever you like.
 
 ## Integrations
 

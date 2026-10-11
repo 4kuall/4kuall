@@ -18,7 +18,7 @@ const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
-const settings = { voice: true, handsfree: false, ambience: false, voiceId: '', browserVoice: '', token: '', ...store.get('oracle.settings', {}) };
+const settings = { voice: true, ambience: false, voiceId: '', browserVoice: '', token: '', ...store.get('oracle.settings', {}) };
 const persist = () => store.set('oracle.settings', settings);
 
 async function api(path, opts = {}) {
@@ -203,118 +203,188 @@ $('#replay').onclick = () => {
   lines.forEach(enqueueSpeech);
 };
 
-// ───────────────── Voice in ─────────────────
-// Browser speech recognition when available; otherwise record and transcribe with ElevenLabs Scribe.
-const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec;
-let recorder;
-let listening = false;
-
-function setListening(on) {
-  listening = on;
-  $('#mic').classList.toggle('live', on);
-  $('#talk').textContent = on ? '■ Stop' : '● Talk';
-  if (on) setState('listening');
-}
-
-async function listen() {
-  ensureAudio();
-  stopSpeaking();
-  showView('oracle');
-  if (Rec) {
-    rec = new Rec();
-    rec.lang = navigator.language || 'en-US';
-    rec.interimResults = true;
-    let finalText = '';
-    rec.onresult = (e) => {
-      let interim = '';
-      for (const r of e.results) (r.isFinal ? (finalText = r[0].transcript) : (interim = r[0].transcript));
-      $('#input').value = finalText || interim;
-    };
-    rec.onend = () => {
-      setListening(false);
-      if (finalText.trim()) ask(finalText.trim());
-      else setState('idle');
-    };
-    rec.start();
-    setListening(true);
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const chunks = [];
-    recorder = new MediaRecorder(stream);
-    recorder.ondataavailable = (e) => chunks.push(e.data);
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      setListening(false);
-      setState('thinking');
-      const fd = new FormData();
-      fd.append('audio', new Blob(chunks, { type: recorder.mimeType }), 'speech.webm');
-      try {
-        const { text } = await getJSON('/api/stt', { method: 'POST', body: fd });
-        if (text.trim()) ask(text.trim());
-        else setState('idle');
-      } catch (err) {
-        setState('idle');
-        alert(err.message);
-      }
-    };
-    recorder.start();
-    setListening(true);
-  } catch {
-    alert('Microphone unavailable.');
-  }
-}
-function stopListening() {
-  if (rec) rec.stop();
-  if (recorder?.state === 'recording') recorder.stop();
-}
-const toggleMic = () => {
-  // Live conversation (ElevenLabs) is the primary way to talk when it's set up.
-  if (liveAvailable || live) return live ? endLive() : startLive();
-  return listening ? stopListening() : listen();
-};
-$('#mic').onclick = toggleMic;
-$('#talk').onclick = toggleMic;
-
-// ───────────────── Live conversation (ElevenLabs Agents, WebRTC) ─────────────────
-// Full-duplex: you talk, it answers in real time, and you can interrupt it.
-// Eleven v4 Turbo voice; the brain is Claude inside the ElevenLabs agent, fed with
-// your Soul profile and reading your library through the consult_library tool.
+// ───────────────── Always listening ─────────────────
+// One tap, ever, and the Oracle keeps its ear open — it doesn't hang up because you went quiet.
+// With ElevenLabs Agents it holds a live, full-duplex line (WebRTC) and reconnects by itself if
+// the line drops. After a few silent minutes it rests: the live line closes to save credits while
+// the browser's own speech recognition keeps listening, and the moment you speak it reopens the
+// line and answers what you said. Without Agents, it listens continuously in the browser.
+// Eleven v4 Turbo voice; the brain is Claude inside the ElevenLabs agent, fed with your Soul
+// profile and reading your library through the consult_library tool.
 const ELEVEN_CLIENT = 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@1.26.0/+esm';
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const REST_AFTER_MS = 4 * 60 * 1000;
 let liveAvailable = false;
 let live = null;
 let liveTurns = [];
 let liveRaf = 0;
+let rec = null; // the browser recognizer (fallback listening, or listening while resting)
+let recorder = null; // record-and-transcribe fallback when the browser has no recognizer
+let listening = false;
+let resting = false;
+let earStarted = false; // browsers need one gesture before the mic and sound may start
+let reconnectTimer = 0;
+let failures = 0;
+let lastVoiceAt = Date.now();
+if (settings.awake === undefined) settings.awake = true;
 
-function setLiveUI(on, label) {
-  document.body.classList.toggle('is-live', on);
-  $('#mic').classList.toggle('live', on);
-  $('#talk').textContent = on ? '■ End' : '● Go live';
-  $('#hint').textContent = label || (on ? 'Live — just talk. Interrupt any time.' : 'It reads what you need. Just speak.');
+const setHint = (text) => { $('#hint').textContent = text; };
+function renderEar() {
+  const on = settings.awake;
+  $('#mic').classList.toggle('live', on && earStarted && (Boolean(live) || listening || resting));
+  $('#mic').classList.toggle('paused', !on);
+  $('#mic').title = on ? 'Always listening — tap to pause' : 'Paused — tap to listen';
+  $('#talk').textContent = !on ? '○ Paused' : !earStarted ? '◉ Wake' : resting ? '◌ Resting' : '◉ Listening';
+  $('#talk').classList.toggle('paused', !on);
+  document.body.classList.toggle('is-live', Boolean(live));
+  document.body.classList.toggle('is-resting', on && resting);
+  $('#awake').checked = on;
 }
 
-async function startLive() {
-  if (live) return;
+// One continuous browser recognizer; onFinal receives each finished phrase.
+function startRecognition(onFinal) {
+  stopRecognition();
+  if (!Rec) return false;
+  const r = new Rec();
+  r.lang = navigator.language || 'en-US';
+  r.continuous = true;
+  r.interimResults = true;
+  r.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i];
+      if (res.isFinal) {
+        const text = res[0].transcript.trim();
+        if (text) onFinal(text);
+      } else interim += res[0].transcript;
+    }
+    if (interim && rec === r) { $('#input').value = interim; oracle.notice('voice'); }
+  };
+  r.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      r.dead = true;
+      setHint('The Oracle needs your microphone. Allow it in your browser settings, then tap ◉.');
+    }
+  };
+  // Browsers stop recognizing after a pause or a minute or so; quietly start again.
+  r.onend = () => {
+    if (rec !== r || r.dead || !settings.awake) return;
+    setTimeout(() => { if (rec === r) try { r.start(); } catch { /* already running */ } }, 250);
+  };
+  rec = r;
+  try { r.start(); } catch { rec = null; return false; }
+  listening = true;
+  return true;
+}
+function stopRecognition() {
+  const r = rec;
+  rec = null;
+  listening = false;
+  if (r) try { r.abort(); } catch { /* gone */ }
+}
+
+// Without ElevenLabs Agents: listen in the browser, answer, then listen again.
+function listenContinuously() {
+  if (live || !settings.awake || busy || speaking) return;
+  const ok = startRecognition((text) => {
+    if (busy || speaking) return;
+    stopRecognition();
+    $('#input').value = '';
+    ask(text);
+  });
+  if (!ok) return recordPhrase();
+  setState('listening');
+  setHint('Listening — always on. Just talk.');
+  renderEar();
+}
+
+// Browsers without speech recognition (Firefox): detect a phrase by its loudness, record it,
+// and transcribe it with ElevenLabs Scribe.
+async function recordPhrase() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    setHint('Microphone unavailable.');
+    return;
+  }
+  ensureAudio();
+  const src = audioCtx.createMediaStreamSource(stream);
+  const meter = audioCtx.createAnalyser();
+  meter.fftSize = 512;
+  src.connect(meter);
+  const buf = new Uint8Array(meter.fftSize);
+  const chunks = [];
+  const rcd = new MediaRecorder(stream);
+  recorder = rcd;
+  rcd.ondataavailable = (e) => chunks.push(e.data);
+  let heard = false;
+  let quietSince = performance.now();
+  const startedAt = quietSince;
+  listening = true;
+  setState('listening');
+  setHint('Listening — always on. Just talk.');
+  renderEar();
+  rcd.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    src.disconnect();
+    listening = false;
+    recorder = null;
+    if (!settings.awake) return renderEar();
+    if (!heard) return listenContinuously();
+    setState('thinking');
+    const fd = new FormData();
+    fd.append('audio', new Blob(chunks, { type: rcd.mimeType }), 'speech.webm');
+    try {
+      const { text } = await getJSON('/api/stt', { method: 'POST', body: fd });
+      if (text.trim()) ask(text.trim());
+      else listenContinuously();
+    } catch (err) {
+      setState('idle');
+      setHint(err.message);
+    }
+  };
+  rcd.start();
+  const vad = () => {
+    if (rcd.state !== 'recording') return;
+    meter.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (const v of buf) sum += ((v - 128) / 128) ** 2;
+    const level = Math.sqrt(sum / buf.length);
+    oracle.setEnergy(Math.min(1, level * 3));
+    const now = performance.now();
+    if (level > 0.04) { heard = true; quietSince = now; }
+    // Stop after a phrase and a breath of silence; start fresh every 20 s of nothing.
+    if ((heard && now - quietSince > 1300) || (!heard && now - startedAt > 20000)) return rcd.stop();
+    requestAnimationFrame(vad);
+  };
+  vad();
+}
+
+async function startLive({ greeting, say } = {}) {
+  if (live || !settings.awake) return;
+  clearTimeout(reconnectTimer);
+  stopRecognition();
+  resting = false;
   ensureAudio();
   stopSpeaking();
-  showView('oracle');
-  setLiveUI(true, 'Connecting…');
+  setHint('Opening the line…');
   setState('thinking');
+  renderEar();
   try {
     // Ask for the mic first so the browser prompt appears right away (and works on iPhone).
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     mic.getTracks().forEach((t) => t.stop());
     const [{ Conversation }, session] = await Promise.all([import(ELEVEN_CLIENT), getJSON('/api/live/start')]);
+    if (!settings.awake) return;
     liveTurns = [];
-    $('#hero').hidden = true;
-    showAnswer();
+    lastVoiceAt = Date.now();
     delete $('#mood-badge').dataset.mood;
+    const dynamicVariables = { ...session.dynamicVariables, ...(greeting ? { greeting } : {}) };
     live = await Conversation.startSession({
       conversationToken: session.conversationToken,
       connectionType: 'webrtc',
-      dynamicVariables: session.dynamicVariables,
+      dynamicVariables,
       clientTools: {
         consult_library: async ({ query }) => {
           showReflection(`Consulting the library: ${query}`);
@@ -327,9 +397,18 @@ async function startLive() {
           }
         },
       },
-      onConnect: () => { setLiveUI(true); setState('listening'); },
-      onModeChange: ({ mode }) => setState(mode === 'speaking' ? 'speaking' : 'listening'),
+      onConnect: () => {
+        failures = 0;
+        setState('listening');
+        setHint('Listening — always on. Talk, pause, interrupt; it stays with you.');
+        renderEar();
+      },
+      onModeChange: ({ mode }) => {
+        lastVoiceAt = Date.now();
+        setState(mode === 'speaking' ? 'speaking' : 'listening');
+      },
       onMessage: ({ message: raw, role, event_id: eventId, response_id: responseId }) => {
+        lastVoiceAt = Date.now();
         const r = role === 'agent' ? 'assistant' : 'user';
         const message = stripTags(raw);
         // Streamed parts/resends share an id: update that turn instead of adding a duplicate.
@@ -341,35 +420,42 @@ async function startLive() {
         } else {
           liveTurns.push({ key, role: r, text: message, el: addLog(r, message) });
         }
-        showAnswer();
+        if (!cardDismissed) showAnswer();
         if (r === 'user') { $('#you').textContent = message; $('#said').textContent = ''; $('#sources').innerHTML = ''; }
         else $('#said').textContent = message;
       },
-      onError: (message) => showReflection(`Live error: ${message}`),
+      onError: (message) => showReflection(`Live: ${message}`),
       onDisconnect: () => finishLive(),
     });
-    // Drive the orb from the real voices: the Oracle's when it speaks, yours when it listens.
+    renderEar();
+    if (say) setTimeout(() => live?.sendUserMessage(say), 500);
+    // Drive the globe from the real voices: the Oracle's when it speaks, yours when it listens.
     const tick = () => {
       if (!live) return;
-      const v = oracle.state === 'speaking' ? live.getOutputVolume() : live.getInputVolume() * 0.5;
+      const input = live.getInputVolume();
+      const v = oracle.state === 'speaking' ? live.getOutputVolume() : input * 0.5;
       oracle.setEnergy(Math.min(1, v * 0.75));
+      if (input > 0.12) lastVoiceAt = Date.now();
+      // A long silence: rest the line (the browser keeps listening) instead of paying for silence.
+      if (Rec && oracle.state !== 'speaking' && Date.now() - lastVoiceAt > REST_AFTER_MS) rest();
       liveRaf = requestAnimationFrame(tick);
     };
     tick();
   } catch (err) {
     live = null;
-    setLiveUI(false);
     setState('idle');
-    showAnswer();
-    $('#said').textContent = err.name === 'NotAllowedError' ? 'The Oracle needs your microphone to talk live. Allow it in your browser settings.' : `Couldn't go live: ${err.message}`;
+    if (err.name === 'NotAllowedError') {
+      settings.awake = false;
+      persist();
+      setHint('The Oracle needs your microphone to listen. Allow it in your browser settings, then tap ◉.');
+      renderEar();
+      return;
+    }
+    // Never deaf: while the live line is down, listen in the browser and keep retrying.
+    if (failures >= 2 && Rec) listenContinuously();
+    else setHint(`Couldn't open the live line (${err.message}). Trying again…`);
+    scheduleReconnect(true);
   }
-}
-
-async function endLive() {
-  if (!live) return;
-  const session = live;
-  await session.endSession().catch(() => {});
-  finishLive();
 }
 
 function finishLive() {
@@ -377,12 +463,77 @@ function finishLive() {
   live = null;
   cancelAnimationFrame(liveRaf);
   oracle.setEnergy(0);
-  setLiveUI(false);
-  setState('idle');
+  if (!resting) setState('idle');
   const turns = liveTurns.map(({ role, text }) => ({ role, text }));
   liveTurns = [];
   if (turns.length) api('/api/live/transcript', { method: 'POST', json: { turns } }).then(() => setTimeout(refreshSoul, 4000)).catch(() => {});
+  renderEar();
+  // The line dropped (network, the session's time cap): quietly pick it back up.
+  scheduleReconnect();
 }
+
+function scheduleReconnect(quiet = false) {
+  clearTimeout(reconnectTimer);
+  if (!settings.awake || !earStarted || live || resting || document.hidden) return;
+  const delay = Math.min(30000, 1000 * 2 ** failures++);
+  if (!quiet) setHint('Reconnecting…');
+  reconnectTimer = setTimeout(() => startLive({ greeting: 'Mm. I’m still here.' }), delay);
+}
+
+async function rest() {
+  if (!live || resting) return;
+  resting = true;
+  await live.endSession().catch(() => {});
+  finishLive();
+  setState('idle');
+  setHint('Resting — it still hears you. Just speak and it wakes.');
+  startRecognition((text) => wakeFromRest(text));
+  renderEar();
+}
+function wakeFromRest(text) {
+  if (!resting) return;
+  stopRecognition();
+  $('#input').value = '';
+  resting = false;
+  startLive({ greeting: 'Mm.', say: text });
+}
+
+// Open the ear the way this setup allows: a live line, or the browser's recognition.
+function openEar() {
+  if (!settings.awake) return;
+  earStarted = true;
+  ensureAudio();
+  if (liveAvailable) { if (!live && !resting) startLive(); } else listenContinuously();
+  renderEar();
+}
+function setAwake(on) {
+  settings.awake = on;
+  persist();
+  clearTimeout(reconnectTimer);
+  if (on) return openEar();
+  resting = false;
+  stopRecognition();
+  if (recorder?.state === 'recording') recorder.stop();
+  if (live) live.endSession().catch(() => {}).finally(finishLive);
+  setState('idle');
+  setHint('Paused. Tap ◉ when you want it listening again.');
+  renderEar();
+}
+const toggleEar = () => (settings.awake && earStarted ? setAwake(false) : setAwake(true));
+$('#mic').onclick = toggleEar;
+$('#talk').onclick = toggleEar;
+// The first touch anywhere wakes it; from then on it simply listens.
+const firstTouch = (e) => {
+  if (earStarted || !settings.awake || !$('#lock').hidden || e.target.closest?.('#mic, #talk')) return;
+  openEar();
+};
+addEventListener('pointerdown', firstTouch, true);
+addEventListener('keydown', firstTouch, true);
+// Phones suspend the mic in the background; pick the line back up on return.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !settings.awake || !earStarted) return;
+  if (liveAvailable ? !live && !resting : !listening && !busy && !speaking) openEar();
+});
 // Closing the tab mid-conversation still saves what was said.
 addEventListener('pagehide', () => {
   if (!liveTurns.length) return;
@@ -442,8 +593,12 @@ async function ask(message) {
     autoGrow();
     return;
   }
+  if (resting && message) { wakeFromRest(message); return; }
+  // A bare link is something to read, not a question: absorb it into the library.
+  if (/^https?:\/\/\S+$/i.test(message || '')) return absorbLink(message);
   if (busy || !message) return;
   busy = true;
+  stopRecognition();
   showView('oracle');
   ensureAudio();
   stopSpeaking();
@@ -544,7 +699,7 @@ async function ask(message) {
     $('#send').disabled = false;
     const finish = () => {
       setState('idle');
-      if (settings.handsfree && settings.voice) setTimeout(listen, 400);
+      if (settings.awake && earStarted && !live && !resting) setTimeout(listenContinuously, 400);
       refreshSoul();
     };
     if (speaking || speechQueue.length) pendingDone = finish;
@@ -572,8 +727,10 @@ function hideAnswer() {
   $('#show-answer').hidden = !hasConversation;
   $('#hero').hidden = Boolean(live);
 }
-$('#close-answer').onclick = hideAnswer;
-$('#show-answer').onclick = showAnswer;
+// If you close the card, live captions stop popping it open again until you ask for it.
+let cardDismissed = false;
+$('#close-answer').onclick = () => { cardDismissed = true; hideAnswer(); };
+$('#show-answer').onclick = () => { cardDismissed = false; showAnswer(); };
 // Tapping the Oracle itself toggles the card, so the eye can have the whole screen.
 $('#stage').addEventListener('click', () => {
   if (document.body.dataset.view !== 'oracle') return;
@@ -582,7 +739,7 @@ $('#stage').addEventListener('click', () => {
 });
 
 // ───────────────── Status & integrations ─────────────────
-const INT_COLORS = { claude: '#d97757', websearch: '#7cc4ff', elevenlabs: '#f5f6f7', huggingface: '#ffd21e', gutenberg: '#c9a6ff', web: '#d4ff3a' };
+const INT_COLORS = { claude: '#d97757', websearch: '#7cc4ff', elevenlabs: '#f5f6f7', huggingface: '#ffd21e', gutenberg: '#c9a6ff', web: '#5cc8ff' };
 let voicesLoaded = false;
 async function loadStatus() {
   let s;
@@ -595,7 +752,8 @@ async function loadStatus() {
   }
   elevenAvailable = s.elevenlabs;
   liveAvailable = Boolean(s.live);
-  if (!live) $('#talk').textContent = liveAvailable ? '● Go live' : '● Talk';
+  renderEar();
+  oracle.setKnowledge(s.library.works);
   $('#pill-mind').className = `pill status ${s.claude ? 'on' : 'off'}`;
   $('#pill-voice').className = `pill status ${s.elevenlabs ? 'on' : ''}`;
   $('#lib-count').textContent = s.library.works;
@@ -666,6 +824,7 @@ async function refreshLibrary() {
   try { libraryDocs = await getJSON('/api/library'); } catch { return; }
   for (const d of libraryDocs) if (d.cover) coverCache.set(d.id, d.cover);
   $('#lib-count').textContent = libraryDocs.length;
+  oracle.setKnowledge(libraryDocs.length);
   const words = libraryDocs.reduce((s, d) => s + d.words, 0);
   $('#lib-stats').innerHTML = '';
   const pill = (n, label) => { const p = el('span', 'pill'); p.append(el('b', '', n), ` ${label}`); return p; };
@@ -743,12 +902,10 @@ async function uploadFiles(files) {
 $('#files').onchange = (e) => uploadFiles([...e.target.files]);
 // Add books straight from the home screen; the Oracle studies them in the background.
 $('#attach').onclick = () => $('#quick-files').click();
-$('#quick-files').onchange = async (e) => {
+$('#quick-files').onchange = (e) => {
   const files = [...e.target.files];
   e.target.value = '';
-  await uploadFiles(files);
-  showReflection('It will study them in the background and draw on them when you talk.');
-  loadStatus();
+  absorbFiles(files);
 };
 const drop = $('#drop');
 ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('hover'); }));
@@ -769,6 +926,40 @@ $('#url-form').onsubmit = async (e) => {
   }
   refreshLibrary();
 };
+
+// Drop books, journals or articles anywhere on the page, or paste a file or link into it.
+async function absorbFiles(files) {
+  if (!files.length) return;
+  await uploadFiles(files);
+  showReflection('It will study them in the background and draw on them when you talk.');
+  loadStatus();
+}
+addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
+addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
+addEventListener('drop', (e) => {
+  document.body.classList.remove('dropping');
+  if (!e.dataTransfer?.files?.length || e.target.closest?.('#drop')) return;
+  e.preventDefault();
+  absorbFiles([...e.dataTransfer.files]);
+});
+addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); absorbFiles(files); }
+});
+async function absorbLink(url) {
+  $('#input').value = '';
+  autoGrow();
+  showReflection(`Reading ${url}…`);
+  setState('thinking');
+  try {
+    const d = await getJSON('/api/library/url', { method: 'POST', json: { url } });
+    showReflection(`Absorbed “${d.title}”. It will study it in the background.`);
+  } catch (err) {
+    showReflection(`Couldn't read that link: ${err.message}`);
+  }
+  setState(live ? 'listening' : 'idle');
+  loadStatus();
+}
 
 $('#text-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -877,7 +1068,7 @@ const bindToggle = (id, key, after) => {
   $(id).onchange = (e) => { settings[key] = e.target.checked; persist(); after?.(e.target.checked); };
 };
 bindToggle('#voice-on', 'voice', (on) => !on && stopSpeaking());
-bindToggle('#handsfree', 'handsfree');
+$('#awake').onchange = (e) => setAwake(e.target.checked);
 bindToggle('#ambience-on', 'ambience', (on) => { ensureAudio(); ambience.toggle(on); });
 $('#token').value = settings.token;
 $('#voice-select').onchange = (e) => { settings.voiceId = e.target.value; persist(); };

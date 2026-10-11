@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b0c0e" />
+  <meta name="theme-color" content="#01030a" />
   <title>Oracle — Third Eye</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d4ff3a'/%3E%3Cpath d='M4 16c3.5-5.5 8-8 12-8s8.5 2.5 12 8c-3.5 5.5-8 8-12 8s-8.5-2.5-12-8z' fill='%230b0c0e'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23d4ff3a'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235cc8ff'/%3E%3Cpath d='M4 16c3.5-5.5 8-8 12-8s8.5 2.5 12 8c-3.5 5.5-8 8-12 8s-8.5-2.5-12-8z' fill='%230b0c0e'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%235cc8ff'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;500;600&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
@@ -44,7 +44,7 @@
     <div class="nav-right">
       <span class="pill status" id="pill-mind"><i></i>Mind</span>
       <span class="pill status" id="pill-voice"><i></i>Voice</span>
-      <button class="btn-lime sm" id="talk">● Talk</button>
+      <button class="btn-lime sm" id="talk">◉ Wake</button>
     </div>
   </nav>
 
@@ -54,8 +54,8 @@
 
     <section class="hero" id="hero">
       <span class="eyebrow" id="eyebrow"><i class="dot"></i> Awakening…</span>
-      <h1>Ask the <em>Oracle</em></h1>
-      <p id="hero-line">Every book you give it becomes a voice. Speak, and it answers from all of them.</p>
+      <h1>Talk to the <em>Oracle</em></h1>
+      <p id="hero-line">Everything you give it — books, journals, articles — becomes part of its mind. Tap once, then just talk.</p>
     </section>
 
     <section class="answer" id="answer" hidden>
@@ -75,14 +75,14 @@
     <button class="pill show-answer" id="show-answer" hidden>▴ Show conversation</button>
 
     <form class="composer" id="ask">
-      <textarea id="input" rows="1" placeholder="Speak what is on your heart…" autocomplete="off"></textarea>
+      <textarea id="input" rows="1" placeholder="Speak, or type — paste a link to teach it" autocomplete="off"></textarea>
       <div class="composer-row">
-        <span class="hint" id="hint">It reads what you need. Just speak.</span>
+        <span class="hint" id="hint">Tap anywhere and just talk. It keeps listening.</span>
         <span class="spacer"></span>
-        <button type="button" id="attach" class="mic" title="Give it a book">📎</button>
+        <button type="button" id="attach" class="mic" title="Give it books, journals or articles — or drop them anywhere">📎</button>
         <input type="file" id="quick-files" multiple accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm" hidden />
-        <button type="button" id="mic" class="mic" title="Speak">🎙</button>
-        <button type="submit" class="btn-lime" id="send">Ask <span>↗</span></button>
+        <button type="button" id="mic" class="mic" title="Always listening — tap to pause">◉</button>
+        <button type="submit" class="btn-lime" id="send" title="Send">↗</button>
       </div>
     </form>
   </main>
@@ -97,8 +97,8 @@
       <label class="card drop" id="drop">
         <input type="file" id="files" multiple accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm" hidden />
         <span class="ico big">⇪</span>
-        <b>Drop books here</b>
-        <small>PDF · EPUB · TXT · MD · HTML — up to 50 at once</small>
+        <b>Drop books, journals, articles</b>
+        <small>PDF · EPUB · TXT · MD · HTML — up to 50 at once, or drop them anywhere</small>
       </label>
       <div class="card">
         <b>Absorb a link</b><small>Blog post, Reddit thread, GitHub repo</small>
@@ -162,7 +162,7 @@
         <label>ElevenLabs voice<select id="voice-select"><option value="">Server default</option></select></label>
         <label>Browser voice (fallback)<select id="browser-voice"></select></label>
         <label class="check"><input type="checkbox" id="voice-on" /> Speak replies aloud</label>
-        <label class="check"><input type="checkbox" id="handsfree" /> Hands-free: listen again after the Oracle speaks</label>
+        <label class="check"><input type="checkbox" id="awake" /> Always listening (it rests after a few quiet minutes and wakes when you speak)</label>
         <label class="check"><input type="checkbox" id="ambience-on" /> Ambient soundscape</label>
       </div>
       <div class="card form">
