@@ -45,6 +45,44 @@ When it speaks, ripples run out from the eye with its real voice. When it thinks
 
 The eye runs on a small attention system. It holds your gaze when listening, follows your pointer, watches you type, and wanders around the room when you go quiet.
 
+## Tasks, automations and WhatsApp
+
+Just ask, by voice or text, in English or Russian:
+- *"Add a task: send the invoice by Friday."*
+- *"Remind me tomorrow at 9 to call mum."*
+- *"Every weekday at 8, send me a quote from Marcus Aurelius."*
+- *"On Friday evening, ask me how the talk with my boss went."*
+- *"Every Sunday at 7 pm, send me my open tasks."*
+
+What it can schedule:
+- **Reminders.** Your words, sent at the time you asked.
+- **Quotes.** Only passages verified word for word from your own books. Picking one costs nothing, because no AI call is needed.
+- **Follow-ups.** The Oracle writes these itself at the moment they're due, using what it knows about you.
+- **Task digests.** A list of your open tasks.
+
+Everything shows up in the **Tasks** tab. There you can tick tasks off, run or stop automations, and see everything it has sent you.
+
+**Connect WhatsApp (free, about 3 minutes, via CallMeBot, personal use only):**
+1. Save **+34 644 76 66 43** as a contact on your phone.
+2. Send it this WhatsApp message: `I allow callmebot to send me messages`
+3. It replies with your API key. If it doesn't within 2 minutes, try again after 24 hours.
+4. In Render → oracle-third-eye → Environment, add:
+   - `CALLMEBOT_APIKEY`: the key it sent you
+   - `WHATSAPP_TO`: your number with country code, e.g. `+447700900123`
+5. Click Save, then press **Send a test** in the Tasks tab.
+
+**Optional: text the Oracle back on WhatsApp (Twilio).** CallMeBot can only send to you. To chat with the Oracle and give it commands from WhatsApp, also set up Twilio's WhatsApp sandbox:
+1. Create a Twilio account. Go to Messaging → Try it out → Send a WhatsApp message, and join the sandbox from your phone.
+2. Set "When a message comes in" to `https://oracle-third-eye.onrender.com/api/whatsapp/inbound` (method POST).
+3. In Render, add these settings:
+   - `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`
+   - `TWILIO_WHATSAPP_FROM`: the sandbox number
+   - `WHATSAPP_TO`: your number
+
+The webhook only accepts messages signed by Twilio and sent from your own number. If both services are set up, the Oracle's own messages go through CallMeBot and replies go through Twilio. This is because WhatsApp only lets business senders like Twilio message you freely within 24 hours of your last message. Twilio may also charge per message, so check twilio.com/pricing.
+
+**Reminders on time.** Render's free plan sleeps after about 15 idle minutes. To keep it awake, the app asks your Supabase database (pg_cron + pg_net) to ping it every 10 minutes. One always-on service fits within the free plan's 750 instance-hours a month (Render's terms can change). `/healthz?details` shows `keepAwake`; set `KEEP_AWAKE=off` to disable it. If the server was asleep anyway, overdue one-off reminders are sent on wake-up, and recurring ones skip to their next time.
+
 ## English and Русский
 
 The Oracle speaks English and Russian, and follows whichever one you use.

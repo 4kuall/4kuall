@@ -11,6 +11,9 @@ import * as store from './store.js';
 await store.init();
 const library = await import('./library.js');
 const oracle = await import('./oracle.js');
+const actions = await import('./actions.js');
+actions.init({ generate: (instruction) => oracle.writeFollowup(instruction), quote: (topic, avoid) => library.pickQuote(topic, avoid) });
+actions.startScheduler();
 
 const app = express();
 app.set('trust proxy', 1);
@@ -33,6 +36,9 @@ app.get('/healthz', async (req, res) => {
     model: process.env.ORACLE_MODEL || 'claude-haiku-5-5',
     memoryMB: Math.round(process.memoryUsage().rss / 1048576),
     semantic: library.stats().semantic.enabled ? 'on' : 'off',
+    whatsapp: actions.channel().name,
+    automations: actions.listAutomations().filter((x) => x.active).length,
+    keepAwake: store.keepAwake,
   });
 });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 * 1024 * 1024 } });
@@ -40,6 +46,22 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 
 const bookUpload = multer({ dest: path.join(os.tmpdir(), 'oracle-uploads'), limits: { fileSize: 80 * 1024 * 1024 } });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.resolve('web')));
+
+// ---------- WhatsApp inbound (Twilio) ----------
+// Twilio calls this when you text the Oracle. It's outside the passcode gate, so it only accepts
+// requests signed with your Twilio auth token and coming from your own number (WHATSAPP_TO).
+app.post('/api/whatsapp/inbound', express.urlencoded({ extended: false }), (req, res) => {
+  const base = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
+  const url = `${base.replace(/\/$/, '')}${req.originalUrl}`;
+  if (!actions.verifyTwilio(req.get('x-twilio-signature'), url, req.body || {})) return res.status(403).send('Forbidden');
+  res.type('text/xml').send('<Response></Response>'); // answer right away; the reply follows as its own message
+  if (!actions.isOwner(req.body.From)) return;
+  const text = String(req.body.Body || '').trim();
+  if (!text) return;
+  oracle.runAgent(text, { channel: 'whatsapp' })
+    .then(({ text: reply }) => actions.send(reply, { source: 'reply' }))
+    .catch((err) => actions.send(`I couldn't answer just now (${err.message}).`, { source: 'error' }));
+});
 
 // Passcode gate so you can host it without the world reading your soul.
 // In the cloud (REQUIRE_ACCESS_TOKEN=true) the API stays locked until ACCESS_TOKEN is set.
@@ -107,6 +129,7 @@ app.get('/api/status', (_req, res) => {
       { id: 'supabase', name: 'Supabase', role: 'Cloud memory: library, soul & history on every device', connected: store.mode === 'supabase', detail: store.storageError || (store.mode === 'supabase' ? 'Connected via DATABASE_URL' : 'Local files — set DATABASE_URL to sync') },
       { id: 'gutenberg', name: 'Project Gutenberg', role: '70,000+ free classics, one click', connected: true, detail: 'Open Discover' },
       { id: 'web', name: 'Blogs · Reddit · GitHub', role: 'Absorb any link', connected: true, detail: 'Paste a URL in the Library' },
+      { id: 'whatsapp', name: 'WhatsApp', role: 'Reminders · quotes · follow-ups', connected: actions.channel().connected, detail: actions.channel().connected ? `${actions.channel().name}${actions.channel().twoWay ? ' · you can text it' : ' · send-only'}` : 'Set up under Tasks' },
     ],
   });
 });
@@ -177,7 +200,7 @@ app.delete('/api/library/:id', async (req, res) => {
 app.get('/api/backup', (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader('Content-Disposition', `attachment; filename="oracle-backup-${stamp}.json"`);
-  res.json({ app: 'oracle-third-eye', version: 1, createdAt: new Date().toISOString(), ...library.exportAll(), profile: oracle.getProfile(), history: oracle.getHistory() });
+  res.json({ app: 'oracle-third-eye', version: 1, createdAt: new Date().toISOString(), ...library.exportAll(), ...actions.exportAll(), profile: oracle.getProfile(), history: oracle.getHistory() });
 });
 
 app.post('/api/backup/restore', upload.single('backup'), async (req, res) => {
@@ -186,9 +209,38 @@ app.post('/api/backup/restore', upload.single('backup'), async (req, res) => {
     if (data.app !== 'oracle-third-eye') throw new Error('That file is not an Oracle backup.');
     const added = await library.restore(data);
     oracle.restoreMemory(data);
+    actions.restore(data);
     res.json({ added });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------- Tasks, automations, WhatsApp ----------
+app.get('/api/tasks', (_req, res) => res.json({
+  tasks: actions.listTasks().filter((t) => t.status !== 'deleted'),
+  automations: actions.listAutomations().filter((a) => a.active),
+  inbox: actions.getInbox().slice(0, 30),
+  channel: actions.channel(),
+  prefs: actions.getPrefs(),
+}));
+app.post('/api/tasks/:id', async (req, res) => res.json(await actions.setTaskStatus(req.params.id, String(req.body.status || 'done'))));
+app.delete('/api/automations/:id', async (req, res) => res.json(await actions.cancel(req.params.id)));
+app.post('/api/automations/:id/run', async (req, res) => {
+  try { res.json({ text: await actions.runNow(req.params.id) }); } catch (err) { res.status(404).json({ error: err.message }); }
+});
+app.put('/api/prefs', (req, res) => res.json(actions.setPrefs(req.body || {})));
+app.post('/api/whatsapp/test', async (_req, res) => {
+  if (!actions.channel().connected) return res.status(400).json({ error: 'WhatsApp is not connected yet. See the steps under Tasks.' });
+  const e = await actions.send('◉ The Oracle is connected. Reminders, quotes and follow-ups will arrive here.', { source: 'test' });
+  res.status(e.delivered ? 200 : 400).json(e.delivered ? { ok: true, via: e.via } : { error: e.error || 'WhatsApp is not connected yet. See the steps under Tasks.' });
+});
+// Commands from the live voice conversation ("remind me tomorrow at 9 to call mum").
+app.post('/api/act', async (req, res) => {
+  try {
+    res.json(await oracle.runAgent(String(req.body.request || '').slice(0, 2000), { channel: 'voice' }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

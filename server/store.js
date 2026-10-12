@@ -11,6 +11,7 @@ const DB_URL = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
 export let mode = DB_URL ? 'supabase' : 'local';
 /** Plain-English reason Supabase couldn't be used (shown in the app), or ''. */
 export let storageError = '';
+export let keepAwake = 'off';
 
 function explainDbError(err) {
   const m = String(err?.message || err);
@@ -78,7 +79,7 @@ alter table oracle_vectors enable row level security;
 export async function init() {
   if (mode === 'local') {
     fs.mkdirSync(path.join(DATA_DIR, 'vectors'), { recursive: true });
-    for (const name of ['profile', 'history']) {
+    for (const name of ['profile', 'history', 'tasks', 'automations', 'inbox', 'prefs']) {
       try { kv.set(name, JSON.parse(fs.readFileSync(path.join(DATA_DIR, `${name}.json`), 'utf8'))); } catch { /* fresh */ }
     }
     try { library = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'library.json'), 'utf8')); } catch { /* fresh */ }
@@ -92,6 +93,7 @@ export async function init() {
 
   try {
     await initDatabase();
+    scheduleKeepAwake(); // in the background; never blocks startup
   } catch (err) {
     // Never crash on a bad database setting: run on temporary local storage and say why.
     storageError = explainDbError(err);
@@ -173,6 +175,28 @@ async function initDatabase() {
   library = { docs, chunks: chunks.map((c) => ({ docId: c.doc_id, i: c.i, text: c.text })) };
   for (const row of (await pool.query('select doc_id, data from oracle_vectors')).rows) vectors.set(row.doc_id, toF32(row.data));
   console.log(`  ▸ storage: Supabase/Postgres — ${docs.length} works, ${chunks.length} passages, ${vectors.size} vector sets`);
+}
+
+// Render's free plan sleeps after ~15 idle minutes, which would make reminders late. Supabase can
+// keep it awake for free: pg_cron calls the server's /healthz every 10 minutes through pg_net.
+// (Render's free plan includes 750 instance-hours a month, enough for one always-on service.)
+async function scheduleKeepAwake() {
+  const url = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL;
+  if (process.env.KEEP_AWAKE === 'off' || !url) {
+    keepAwake = process.env.KEEP_AWAKE === 'off' ? 'off (KEEP_AWAKE=off)' : 'off (not on Render)';
+    if (url) await pool.query("select cron.unschedule('oracle-keep-awake')").catch(() => {});
+    return;
+  }
+  try {
+    await pool.query('create extension if not exists pg_cron');
+    await pool.query('create extension if not exists pg_net');
+    const target = `${url.replace(/\/$/, '')}/healthz`.replace(/'/g, '');
+    await pool.query(`select cron.schedule('oracle-keep-awake', '*/10 * * * *', $cmd$select net.http_get(url := '${target}')$cmd$)`);
+    keepAwake = 'on (Supabase pings every 10 min)';
+  } catch (err) {
+    keepAwake = `unavailable: ${err.message.slice(0, 120)}`;
+    console.warn('[store] keep-awake not set up:', err.message);
+  }
 }
 
 function toF32(buf) {

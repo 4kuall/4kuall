@@ -38,6 +38,7 @@
       <button data-view-link="oracle" class="on">Oracle</button>
       <button data-view-link="library">Library <span class="count" id="lib-count">0</span></button>
       <button data-view-link="discover">Discover <span class="badge">New</span></button>
+      <button data-view-link="tasks">Tasks <span class="count" id="task-count">0</span></button>
       <button data-view-link="soul">Soul</button>
       <button data-view-link="integrations">Integrations</button>
     </div>
@@ -126,6 +127,20 @@
     </div>
     <div class="toast" id="gut-status"></div>
     <div class="grid books" id="gut-grid"></div>
+  </section>
+
+  <!-- ───────── Tasks & automations ───────── -->
+  <section class="view sheet" id="view-tasks" hidden>
+    <div class="sheet-head">
+      <div><span class="kicker">Just ask the Oracle — “remind me every morning at 8 with a Stoic quote”</span><h2>Tasks &amp; <em>automations</em></h2></div>
+      <div class="stats" id="wa-status"></div>
+    </div>
+    <div class="card wa-setup" id="wa-setup" hidden></div>
+    <div class="two-col">
+      <div class="card"><b>Tasks</b><small>Tap to mark done</small><ul class="task-list" id="task-list"></ul></div>
+      <div class="card"><b>Scheduled</b><small>Runs on its own and messages your WhatsApp</small><ul class="auto-list" id="auto-list"></ul></div>
+    </div>
+    <div class="card"><b>Recently sent</b><small>Everything it sent you, also kept here</small><ul class="inbox-list" id="inbox-list"></ul></div>
   </section>
 
   <!-- ───────── Soul ───────── -->

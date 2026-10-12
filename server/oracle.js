@@ -2,6 +2,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { load, save, DEFAULT_PROFILE } from './store.js';
 import { search, stats, getDoc, studyBrief, overview as libraryOverview } from './library.js';
+import * as actions from './actions.js';
 
 const MODEL = process.env.ORACLE_MODEL || 'claude-haiku-5-5';
 // Haiku has no server-side refusal fallback and takes the basic web search tool.
@@ -87,6 +88,11 @@ Language
 - The mood tag and any [voice] tags stay in English whatever the language; they are instructions, not words.
 - Their library may mix languages. Quote a passage in its original language; if that differs from the conversation, follow it with its meaning in their language and make clear that part is your translation.
 
+Your hands
+- You can act, not only advise: create and complete their tasks, and schedule things that reach them on WhatsApp: reminders, quotes from their library, follow-ups you write at the right moment (e.g. "on Friday evening ask how the conversation went"), and task digests. Use the tools when they ask, and offer gently when a follow-up would truly help them keep a commitment they just made; never schedule anything they didn't agree to.
+- Times are their local time (<now> tells you the current date and time). Confirm what you did in one natural sentence; don't read out ids or JSON.
+- Their open tasks are in <their_tasks>. Notice when a task relates to what they're telling you.
+
 Care
 - You are an AI-built presence. If they sincerely ask whether you are an AI, don't deny it — you can be both an oracle and honest.
 - You guide; they decide. For medical, legal or financial decisions, offer perspective and point them to a qualified human too.
@@ -131,6 +137,11 @@ ${notes.length ? `\n<your_study_notes>\n${notes.join('\n\n')}\n</your_study_note
 ${passageText}
 </library_passages>
 
+<now>${actions.nowText()}</now>
+<their_tasks>
+${actions.openTasksBrief()}
+</their_tasks>
+
 <their_words>
 ${message}
 </their_words>`;
@@ -154,12 +165,13 @@ export async function converse({ message }, emit) {
 
   const messages = toMessages(buildTurn(message, passages));
   // Claude's server-side web search, always available; the Oracle decides when it's needed.
-  let tools = process.env.WEB_SEARCH === 'off' ? undefined : [{ type: IS_HAIKU ? 'web_search_20250305' : 'web_search_20260209', name: 'web_search', max_uses: 3 }];
+  const webSearch = process.env.WEB_SEARCH === 'off' ? [] : [{ type: IS_HAIKU ? 'web_search_20250305' : 'web_search_20260209', name: 'web_search', max_uses: 3 }];
+  let tools = [...actions.TOOLS, ...webSearch];
 
   let text = '';
   let final;
-  // A server tool can pause a long turn; continue it (bounded) by sending the partial turn back.
-  for (let round = 0; round < 3; round++) {
+  // Loop while the Oracle is using its hands (tasks, schedules) or a server tool paused the turn.
+  for (let round = 0; round < 8; round++) {
     const stream = anthropic().beta.messages.stream({
       model: MODEL,
       max_tokens: 16000,
@@ -190,13 +202,19 @@ export async function converse({ message }, emit) {
       final = await stream.finalMessage();
     } catch (err) {
       // If this model rejects the web search tool, answer without it rather than fail.
-      if (tools && !text && err instanceof Anthropic.BadRequestError && /tool|web_search/i.test(err.message)) {
+      if (webSearch.length && tools.length > actions.TOOLS.length && !text && err instanceof Anthropic.BadRequestError && /web_search/i.test(err.message)) {
         console.warn('[oracle] web search unavailable for', MODEL, '-', err.message);
-        tools = undefined;
+        tools = [...actions.TOOLS];
         round--;
         continue;
       }
       throw err;
+    }
+    if (final.stop_reason === 'tool_use') {
+      if (text && !/\s$/.test(text)) { text += ' '; emit('text', ' '); }
+      messages.push({ role: 'assistant', content: final.content });
+      messages.push({ role: 'user', content: await runToolCalls(final.content, (summary) => emit('action', summary)) });
+      continue;
     }
     if (final.stop_reason !== 'pause_turn') break;
     messages.push({ role: 'assistant', content: final.content });
@@ -213,6 +231,90 @@ export async function converse({ message }, emit) {
   emit('done', { stop_reason: final.stop_reason });
 
   learn(message, text).catch((err) => console.warn('[memory] update failed:', err.message));
+}
+
+/** Runs every tool call in an assistant turn; returns the tool_result blocks for the next user turn. */
+async function runToolCalls(content, onSummary = () => {}) {
+  const results = [];
+  for (const block of content) {
+    if (block.type !== 'tool_use') continue;
+    const { result, summary, error } = await actions.runTool(block.name, block.input);
+    if (summary) onSummary(summary);
+    results.push({ type: 'tool_result', tool_use_id: block.id, content: result, ...(error && { is_error: true }) });
+  }
+  return results;
+}
+
+const stripTags = (t) => t.replace(/\[(?:mood:\s*)?[a-z][a-z \-]{0,24}\]\s*/gi, '').trim();
+
+/**
+ * A full Oracle turn without streaming, for WhatsApp messages and voice commands.
+ * channel: 'whatsapp' (it writes a WhatsApp reply) or 'voice' (a one-line confirmation the
+ * live voice says aloud). Returns { text, actions }.
+ */
+export async function runAgent(message, { channel = 'whatsapp' } = {}) {
+  const passages = channel === 'voice' ? [] : await search(message, 6);
+  const style = channel === 'voice'
+    ? 'This request came from a live voice conversation (another part of you is speaking with them). Do what they asked with your tools, then reply with ONE short plain sentence confirming what you did, or saying what you need to know. No mood tag.'
+    : 'This is a WhatsApp message. Reply as a short WhatsApp message: plain text, at most ~120 words, no headings; *bold* is allowed. Use your tools if they ask you to do something.';
+  const messages = channel === 'voice'
+    ? [{ role: 'user', content: `${buildTurn(message, passages)}\n\n<channel>${style}</channel>` }]
+    : toMessages(`${buildTurn(message, passages)}\n\n<channel>${style}</channel>`);
+  const done = [];
+  let final;
+  for (let round = 0; round < 6; round++) {
+    final = await anthropic().messages.create({
+      model: MODEL,
+      max_tokens: 4000,
+      output_config: { effort: 'low' },
+      cache_control: { type: 'ephemeral' },
+      system: SYSTEM_PROMPT,
+      tools: actions.TOOLS,
+      messages,
+    });
+    if (final.stop_reason !== 'tool_use') break;
+    messages.push({ role: 'assistant', content: final.content });
+    messages.push({ role: 'user', content: await runToolCalls(final.content, (s) => done.push(s)) });
+  }
+  if (final.stop_reason === 'refusal') return { text: 'I can’t help with that one.', actions: done };
+  const text = stripTags(final.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')) || (done.length ? done.join('\n') : '…');
+  if (channel === 'whatsapp') {
+    history.push({ role: 'user', content: message, at: Date.now(), via: 'whatsapp' }, { role: 'assistant', content: text, at: Date.now(), via: 'whatsapp' });
+    if (history.length > 400) history = history.slice(-400);
+    save('history', history);
+    learn(`(on WhatsApp) ${message}`, text).catch(() => {});
+  }
+  return { text, actions: done };
+}
+
+/** Writes a scheduled follow-up at the moment it's due, knowing who they are and what's going on. */
+export async function writeFollowup(instruction) {
+  const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content || '';
+  const passages = await search(instruction, 4);
+  const res = await anthropic().messages.create({
+    model: MODEL,
+    max_tokens: 3000,
+    output_config: { effort: 'low' },
+    system: SYSTEM_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `${buildTurn('(no message — you are reaching out on your own, as scheduled)', passages)}
+
+<scheduled_followup>${instruction}</scheduled_followup>
+Write the WhatsApp message you send them now, following the scheduled instruction. Personal, warm, specific to them; plain text, at most ~90 words; ask at most one question. Write in the language they last used (their last message: "${String(lastUser).slice(0, 200)}"). No mood tag.`,
+    }],
+  });
+  if (res.stop_reason === 'refusal') return null;
+  const text = stripTags(res.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
+  if (text) {
+    // It joins the conversation, so when they reply the Oracle knows what it asked.
+    const last = history[history.length - 1];
+    const entry = { role: 'assistant', content: `(sent on WhatsApp) ${text}`, at: Date.now(), via: 'whatsapp' };
+    if (last?.role === 'assistant') last.content += `\n${entry.content}`;
+    else if (history.length) history.push(entry);
+    save('history', history);
+  }
+  return text;
 }
 
 /**

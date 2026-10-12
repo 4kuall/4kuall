@@ -291,3 +291,18 @@ body.dropping::after { content: 'Drop to teach the Oracle'; position: fixed; ins
 .hero h1 em { font-weight: 600; background: linear-gradient(90deg, #8fe3ff, #4f8bff 60%, #9b7dff); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .sheet h2 { font-weight: 300; text-transform: none; letter-spacing: -.01em; }
 .wordmark { font-family: var(--display); font-weight: 500; letter-spacing: .14em; }
+
+/* ───── Tasks & automations ───── */
+.task-list, .auto-list, .inbox-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.task-list li, .auto-list li, .inbox-list li { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(6,12,26,.6); }
+.task-list li { cursor: pointer; }
+.task-list li:hover { border-color: var(--line-2); }
+.task-list .box { width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--lime); flex: none; margin-top: 2px; }
+.task-list li.done { opacity: .5; } .task-list li.done .box { background: var(--lime); } .task-list li.done .t { text-decoration: line-through; }
+.task-list .t, .auto-list .t, .inbox-list .t { flex: 1; min-width: 0; }
+.task-list small, .auto-list small, .inbox-list small { display: block; color: var(--muted); font-size: .78rem; margin-top: 2px; }
+.auto-list .icon-btn { flex: none; }
+.inbox-list .t { white-space: pre-wrap; font-size: .9rem; color: var(--ink-2); }
+.wa-setup ol { margin: 8px 0 10px; padding-left: 20px; color: var(--ink-2); line-height: 1.6; }
+.wa-setup code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
+.empty-small { color: var(--muted); font-size: .9rem; padding: 6px 2px; }

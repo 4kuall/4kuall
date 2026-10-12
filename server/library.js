@@ -207,6 +207,36 @@ export async function addDocument({ title, author = '', source = '', type = 'tex
 }
 
 /** Everything needed to rebuild the library elsewhere (search vectors are recomputed). */
+/**
+ * A quote for a scheduled message: only passages verified word-for-word during study (or, for
+ * works not yet studied, a sentence lifted straight from the text), matched to a topic or
+ * author when one is given, never repeating the recently sent ones. Costs nothing to run.
+ */
+export function pickQuote(topic = '', avoid = []) {
+  const want = new Set(tokenize(topic));
+  const pool = [];
+  for (const d of library.docs) {
+    const meta = tokenize(`${d.title} ${d.author}`);
+    const docHit = meta.some((t) => want.has(t));
+    const source = [d.author, d.title].filter(Boolean).join(', ');
+    const passages = d.study?.passages?.length
+      ? d.study.passages
+      : library.chunks.filter((c) => c.docId === d.id).slice(0, 40)
+        .flatMap((c) => c.text.split(/(?<=[.!?…])\s+/))
+        .filter((x) => x.length > 60 && x.length < 260 && /^[\p{Lu}"“«]/u.test(x));
+    for (const text of passages) {
+      const key = `${d.id}:${text.slice(0, 40)}`;
+      if (avoid.includes(key)) continue;
+      const score = want.size ? (docHit ? 5 : 0) + tokenize(text).filter((t) => want.has(t)).length : 1;
+      pool.push({ text, source, key, score });
+    }
+  }
+  if (!pool.length) return null;
+  const best = Math.max(...pool.map((q) => q.score));
+  const top = pool.filter((q) => q.score === best);
+  return top[Math.floor(Math.random() * top.length)];
+}
+
 export function exportAll() {
   return { docs: library.docs, chunks: library.chunks };
 }

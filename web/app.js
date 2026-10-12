@@ -87,6 +87,7 @@ function showView(name) {
   if (name === 'library') refreshLibrary();
   if (name === 'discover' && !$('#gut-grid').children.length) loadClassics();
   if (name === 'soul') refreshSoul();
+  if (name === 'tasks') refreshTasks();
   if (name === 'integrations') loadStatus();
   oracle.setFocus(name === 'oracle');
 }
@@ -234,7 +235,7 @@ $('#replay').onclick = () => {
 // profile and reading your library through the consult_library tool.
 const ELEVEN_CLIENT = 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@1.26.0/+esm';
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-const REST_AFTER_MS = 4 * 60 * 1000;
+const REST_AFTER_MS = 2 * 60 * 1000; // shorter = cheaper: the paid line closes sooner when you go quiet
 let liveAvailable = false;
 let live = null;
 let liveTurns = [];
@@ -409,6 +410,17 @@ async function startLive({ greeting, say } = {}) {
       connectionType: 'webrtc',
       dynamicVariables,
       clientTools: {
+        // "Remind me tomorrow at 9…", "add a task…", "send me that quote": the server does it.
+        take_action: async ({ request }) => {
+          try {
+            const r = await getJSON('/api/act', { method: 'POST', json: { request } });
+            (r.actions || []).forEach(showReflection);
+            refreshTasks();
+            return r.text;
+          } catch (err) {
+            return `That didn't work (${err.message}).`;
+          }
+        },
         consult_library: async ({ query }) => {
           showReflection(`Consulting the library: ${query}`);
           try {
@@ -702,6 +714,7 @@ async function ask(message) {
           lines.filter((l) => l.length > 12).forEach(showReflection);
         } else if (event === 'sources') renderSources(data);
         else if (event === 'searching') showReflection('Searching beyond the library…');
+        else if (event === 'action') { showReflection(data); refreshTasks(); }
         else if (event === 'web') {
           for (const w of data) {
             const a = el('a', 'web', `⌁ ${w.title || new URL(w.url).hostname}`);
@@ -1158,6 +1171,78 @@ addEventListener('pointerdown', () => { if (settings.ambience) { ensureAudio(); 
 // ───────────────── Install as an app ─────────────────
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
+// ───────────────── Tasks, automations, WhatsApp ─────────────────
+const when = (iso) => (iso ? new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+async function refreshTasks() {
+  let d;
+  try { d = await getJSON('/api/tasks'); } catch { return; }
+  const open = d.tasks.filter((t) => t.status === 'open');
+  $('#task-count').textContent = open.length;
+  $('#wa-status').innerHTML = '';
+  const pill = el('span', `pill status ${d.channel.connected ? 'on' : ''}`);
+  pill.append(el('i'), ` ${d.channel.name}`);
+  $('#wa-status').append(pill);
+  if (d.channel.connected) {
+    const test = el('button', 'btn-ghost', 'Send a test');
+    test.onclick = async () => {
+      test.disabled = true;
+      try { await getJSON('/api/whatsapp/test', { method: 'POST' }); test.textContent = 'Sent ✓'; } catch (err) { test.textContent = 'Failed'; alert(err.message); }
+      setTimeout(refreshTasks, 1500);
+    };
+    $('#wa-status').append(test);
+  }
+  const setup = $('#wa-setup');
+  setup.hidden = d.channel.connected;
+  if (!d.channel.connected) {
+    setup.innerHTML = `<b>Connect your WhatsApp (free, about 3 minutes)</b>
+      <ol>
+        <li>On your phone, save <code>+34 644 76 66 43</code> as a contact (CallMeBot's free bot, personal use only).</li>
+        <li>Send it this WhatsApp message: <code>I allow callmebot to send me messages</code></li>
+        <li>It replies with your <b>APIKEY</b> (if not within 2 minutes, try again after 24 h).</li>
+        <li>In Render → oracle-third-eye → Environment, add <code>CALLMEBOT_APIKEY</code> = that key and <code>WHATSAPP_TO</code> = your number with country code (e.g. <code>+44…</code>). Save.</li>
+      </ol>
+      <small>Until then, everything it would send is kept below. Want to text the Oracle back on WhatsApp too? That needs Twilio; see the README.</small>`;
+  }
+  const tl = $('#task-list');
+  tl.innerHTML = '';
+  const shown = [...open, ...d.tasks.filter((t) => t.status === 'done').slice(-5)];
+  if (!shown.length) tl.append(el('li', 'empty-small', 'No tasks yet. Say “add a task: …”.'));
+  for (const t of shown) {
+    const li = el('li', t.status === 'done' ? 'done' : '');
+    const body = el('div', 't', t.title);
+    if (t.due) body.append(el('small', '', `Due ${when(t.due)}`));
+    li.append(el('span', 'box'), body);
+    li.onclick = async () => { await api(`/api/tasks/${t.id}`, { method: 'POST', json: { status: t.status === 'done' ? 'open' : 'done' } }); refreshTasks(); };
+    tl.append(li);
+  }
+  const al = $('#auto-list');
+  al.innerHTML = '';
+  if (!d.automations.length) al.append(el('li', 'empty-small', 'Nothing scheduled. Try “every weekday at 8, send me a quote from Marcus Aurelius”.'));
+  for (const a of d.automations) {
+    const body = el('div', 't', a.title);
+    body.append(el('small', '', `${a.when} · next ${a.nextRunText}`));
+    const run = el('button', 'icon-btn', '▶');
+    run.title = 'Send it now';
+    run.onclick = async () => { run.disabled = true; await api(`/api/automations/${a.id}/run`, { method: 'POST' }).catch(() => {}); refreshTasks(); };
+    const x = el('button', 'icon-btn', '✕');
+    x.title = 'Stop it';
+    x.onclick = async () => { if (confirm(`Stop “${a.title}”?`)) { await api(`/api/automations/${a.id}`, { method: 'DELETE' }); refreshTasks(); } };
+    const li = el('li');
+    li.append(body, run, x);
+    al.append(li);
+  }
+  const il = $('#inbox-list');
+  il.innerHTML = '';
+  if (!d.inbox.length) il.append(el('li', 'empty-small', 'Nothing sent yet.'));
+  for (const m of d.inbox) {
+    const body = el('div', 't', m.text);
+    body.append(el('small', '', `${when(m.at)} · ${m.delivered ? `✓ ${m.via}` : `kept here${m.error ? ` (${m.error})` : ''}`}`));
+    const li = el('li');
+    li.append(body);
+    il.append(li);
+  }
+}
+
 // ───────────────── Russian home screen ─────────────────
 function localizeHome() {
   if (currentLang() !== 'ru') return;
@@ -1172,6 +1257,9 @@ localizeHome();
 (async () => {
   await loadStatus();
   refreshLibrary();
+  // Schedules run in your timezone; tell the server which one that is.
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  api('/api/prefs', { method: 'PUT', json: { tz } }).then(refreshTasks).catch(() => {});
   try {
     const hist = await getJSON('/api/history');
     for (const m of hist) addLog(m.role, stripTags(m.content));
