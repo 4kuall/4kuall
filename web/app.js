@@ -714,7 +714,7 @@ async function ask(message) {
           lines.filter((l) => l.length > 12).forEach(showReflection);
         } else if (event === 'sources') renderSources(data);
         else if (event === 'searching') showReflection('Searching beyond the library…');
-        else if (event === 'action') { showReflection(data); refreshTasks(); }
+        else if (event === 'action') { showReflection(data); data.startsWith('◈') ? refreshMind() : refreshTasks(); }
         else if (event === 'web') {
           for (const w of data) {
             const a = el('a', 'web', `⌁ ${w.title || new URL(w.url).hostname}`);
@@ -1080,18 +1080,133 @@ async function refreshSoul() {
     d.append(el('span', '', k), el('p', '', v));
     traits.append(d);
   }
-  const ul = $('#insights');
+  refreshMind();
+}
+
+// ───────────────── The Oracle's mind ─────────────────
+const CHALLENGE = ['', 'Gentle supporter', 'Supportive, honest', 'Balanced', 'Challenger', 'Toughest sparring partner'];
+const WARMTH = ['', 'Cool, precise', 'Calm', 'Warm, direct', 'Warm, encouraging', 'Tender'];
+const MODEL_NAMES = { 'claude-haiku-5-5': 'Haiku 5.5: fastest, cheapest', 'claude-sonnet-5-5': 'Sonnet 5.5: sharper (~20× Haiku)', 'claude-opus-5-5': 'Opus 5.5: deepest (~40× Haiku)' };
+let mind = null;
+async function refreshMind() {
+  try { mind = await getJSON('/api/mind'); } catch { return; }
+  const f = $('#mind-form');
+  const st = mind.settings;
+  f.challenge.value = st.challenge;
+  f.warmth.value = st.warmth;
+  f.depth.value = st.depth;
+  $('#challenge-out').textContent = CHALLENGE[st.challenge];
+  $('#warmth-out').textContent = WARMTH[st.warmth];
+  const sel = $('#model-select');
+  sel.innerHTML = '';
+  sel.append(new Option(`Server default (${MODEL_NAMES[mind.defaultModel]?.split(':')[0] || mind.defaultModel})`, ''));
+  for (const m of mind.models) sel.append(new Option(MODEL_NAMES[m] || m, m));
+  sel.value = st.model;
+  for (const k of ['devilsAdvocate', 'outOfBox', 'autonomy']) f[k].checked = st[k];
+  if (document.activeElement !== f.rules) f.rules.value = st.rules;
+  const kindSel = $('#new-kind');
+  if (!kindSel.options.length) for (const k of mind.kinds) kindSel.append(new Option(k.replace('_', ' '), k));
+  $('#mem-count').textContent = mind.memories.length;
+  $('#mind-stats').innerHTML = '';
+  const pill = (n, label) => { const x = el('span', 'pill'); x.append(el('b', '', n), ` ${label}`); return x; };
+  $('#mind-stats').append(pill(mind.memories.length, 'memories'), pill(mind.episodes.length, 'conversations'));
+  renderMemories();
+  const ch = $('#changes');
+  ch.innerHTML = '';
+  if (!mind.changes.length) ch.append(el('li', 'empty-small', 'No changes yet.'));
+  for (const c of mind.changes.slice(0, 40)) {
+    const li = el('li');
+    const verb = { added: 'Remembered', revised: 'Rethought', forgot: 'Let go of' }[c.action] || c.action;
+    li.append(el('b', '', `${c.by === 'you' ? 'You' : c.by === 'system' ? 'Memory full' : 'It'} · ${verb}: `), c.text);
+    if (c.from) li.append(el('small', '', `was: ${c.from}`));
+    li.append(el('small', '', `${when(c.at)}${c.reason ? ` · ${c.reason}` : ''}`));
+    ch.append(li);
+  }
+  const ep = $('#episodes');
+  ep.innerHTML = '';
+  if (!mind.episodes.length) ep.append(el('li', 'empty-small', 'After about 10 messages, or a spoken conversation, it writes its first summary here.'));
+  for (const e of mind.episodes) {
+    const li = el('li');
+    li.append(el('b', '', e.title || 'Conversation'), el('div', '', e.summary), el('small', '', `${when(e.from)}${e.topics?.length ? ` · ${e.topics.join(', ')}` : ''}`));
+    const x = el('button', 'icon-btn', '✕');
+    x.title = 'Forget this conversation summary';
+    x.onclick = async () => { if (confirm('Delete this conversation summary?')) { await api(`/api/episodes/${e.id}`, { method: 'DELETE' }); refreshMind(); } };
+    li.append(x);
+    ep.append(li);
+  }
+}
+function renderMemories() {
+  const q = $('#memory-search').value.trim().toLowerCase();
+  const ul = $('#memories');
   ul.innerHTML = '';
-  if (!p.insights?.length) ul.append(el('li', 'empty', 'Nothing learned yet.'));
-  for (const [i, s] of (p.insights || []).entries()) {
-    const li = el('li', '', s);
-    li.onclick = async () => {
-      if (!confirm('Have the Oracle forget this?')) return;
-      await api('/api/profile', { method: 'PUT', json: { insights: p.insights.filter((_, j) => j !== i) } });
-      refreshSoul();
+  const list = mind.memories
+    .filter((m) => !q || m.text.toLowerCase().includes(q) || m.kind.includes(q))
+    .sort((a, b) => (b.pinned - a.pinned) || (b.importance - a.importance) || b.updatedAt.localeCompare(a.updatedAt));
+  if (!list.length) ul.append(el('li', 'empty-small', q ? 'Nothing matches.' : 'Empty. It fills this as you talk, or add something above.'));
+  for (const m of list) {
+    const li = el('li', m.pinned ? 'pinned' : '');
+    const text = el('div', 'text', m.text);
+    const meta = el('div', 'meta');
+    meta.append(el('span', `kind ${m.kind}`, m.kind.replace('_', ' ')));
+    const dots = el('span', 'dots', '●'.repeat(m.importance) + '○'.repeat(5 - m.importance));
+    dots.title = 'Importance: tap to change';
+    dots.onclick = async () => { await api(`/api/memories/${m.id}`, { method: 'PUT', json: { importance: (m.importance % 5) + 1 } }); refreshMind(); };
+    meta.append(dots, el('span', '', `${m.source === 'you' ? 'by you' : 'by the Oracle'} · ${when(m.updatedAt)}`));
+    const last = m.revisions?.[m.revisions.length - 1];
+    if (last?.reason) meta.append(el('span', '', `· rethought: ${last.reason}`));
+    const acts = el('div', 'acts');
+    const pin = el('button', 'icon-btn', m.pinned ? '📌' : '📍');
+    pin.title = m.pinned ? 'Unpin (it may change this again)' : 'Pin (it can no longer change or delete it)';
+    pin.onclick = async () => { await api(`/api/memories/${m.id}`, { method: 'PUT', json: { pinned: !m.pinned } }); refreshMind(); };
+    const edit = el('button', 'icon-btn', '✎');
+    edit.title = 'Edit';
+    edit.onclick = () => {
+      text.contentEditable = 'true';
+      text.focus();
+      text.onblur = async () => {
+        text.contentEditable = 'false';
+        const t = text.textContent.trim();
+        if (t && t !== m.text) await api(`/api/memories/${m.id}`, { method: 'PUT', json: { text: t } });
+        refreshMind();
+      };
+      text.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); text.blur(); } };
     };
+    const del = el('button', 'icon-btn', '✕');
+    del.title = 'Delete';
+    del.onclick = async () => { if (confirm('Make it forget this?')) { await api(`/api/memories/${m.id}`, { method: 'DELETE' }); refreshMind(); } };
+    acts.append(pin, edit, del);
+    li.append(text, acts, meta);
     ul.append(li);
   }
+}
+$('#memory-search').addEventListener('input', () => mind && renderMemories());
+$('#add-memory').onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $('#new-memory').value.trim();
+  if (!text) return;
+  await api('/api/memories', { method: 'POST', json: { text, kind: $('#new-kind').value, importance: 4 } });
+  $('#new-memory').value = '';
+  refreshMind();
+};
+async function saveMind(patch) {
+  try {
+    await api('/api/mind/settings', { method: 'PUT', json: patch });
+    toast('#mind-status', 'Saved ✓');
+    setTimeout(() => toast('#mind-status', ''), 1500);
+  } catch (err) {
+    toast('#mind-status', err.message, true);
+  }
+}
+{
+  const f = $('#mind-form');
+  f.challenge.oninput = () => { $('#challenge-out').textContent = CHALLENGE[f.challenge.value]; };
+  f.warmth.oninput = () => { $('#warmth-out').textContent = WARMTH[f.warmth.value]; };
+  f.challenge.onchange = () => saveMind({ challenge: +f.challenge.value });
+  f.warmth.onchange = () => saveMind({ warmth: +f.warmth.value });
+  f.depth.onchange = () => saveMind({ depth: f.depth.value });
+  f.model.onchange = () => saveMind({ model: f.model.value });
+  for (const k of ['devilsAdvocate', 'outOfBox', 'autonomy']) f[k].onchange = () => saveMind({ [k]: f[k].checked });
+  f.onsubmit = (e) => { e.preventDefault(); saveMind({ rules: f.rules.value }); };
 }
 $('#soul-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -1260,6 +1375,7 @@ localizeHome();
   // Schedules run in your timezone; tell the server which one that is.
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   api('/api/prefs', { method: 'PUT', json: { tz } }).then(refreshTasks).catch(() => {});
+  refreshMind();
   try {
     const hist = await getJSON('/api/history');
     for (const m of hist) addLog(m.role, stripTags(m.content));

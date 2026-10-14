@@ -306,3 +306,32 @@ body.dropping::after { content: 'Drop to teach the Oracle'; position: fixed; ins
 .wa-setup ol { margin: 8px 0 10px; padding-left: 20px; color: var(--ink-2); line-height: 1.6; }
 .wa-setup code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
 .empty-small { color: var(--muted); font-size: .9rem; padding: 6px 2px; }
+
+/* ───── Mind ───── */
+.mind-form .dials { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 10px 0; }
+.mind-form .toggles { display: grid; gap: 6px; margin-bottom: 10px; }
+.mind-form output { color: var(--lime); font-family: var(--ui); font-size: .78rem; margin-left: 6px; }
+.mind-form input[type=range] { padding: 0; accent-color: var(--lime); }
+.row-end { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.add-memory { display: flex; gap: 8px; margin: 10px 0 8px; }
+.add-memory select { width: auto; }
+.memory-search { margin-bottom: 8px; }
+.memories, .changes, .episodes { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; max-height: 560px; overflow-y: auto; }
+.memories li, .changes li, .episodes li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(6,12,26,.6); }
+.memories li { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: start; }
+.memories li.pinned { border-color: rgba(92,200,255,.45); }
+.memories .text { outline: none; border-radius: 6px; }
+.memories .text[contenteditable=true] { background: var(--surface-2); padding: 4px 6px; }
+.memories .meta { grid-column: 1; display: flex; gap: 8px; align-items: center; font-size: .74rem; color: var(--muted); flex-wrap: wrap; }
+.memories .kind { text-transform: uppercase; letter-spacing: .06em; font-family: var(--ui); font-size: .64rem; padding: 2px 6px; border-radius: 5px; background: var(--surface-2); color: var(--ink-2); }
+.memories .kind.own_view { background: rgba(155,125,255,.18); color: #c9b8ff; }
+.memories .kind.commitment { background: rgba(92,200,255,.16); color: var(--lime); }
+.memories .dots { cursor: pointer; letter-spacing: 1px; color: var(--lime); }
+.memories .acts { grid-row: 1 / span 2; grid-column: 2; display: flex; gap: 4px; }
+.memories .acts .icon-btn { width: 28px; height: 28px; font-size: .8rem; }
+.changes li { font-size: .86rem; color: var(--ink-2); }
+.changes li b { color: var(--ink); font-weight: 600; }
+.changes small, .episodes small { display: block; color: var(--muted); margin-top: 3px; font-size: .76rem; }
+.episodes li { position: relative; padding-right: 40px; }
+.episodes .icon-btn { position: absolute; right: 8px; top: 8px; width: 26px; height: 26px; font-size: .75rem; }
+@media (max-width: 900px) { .mind-form .dials { grid-template-columns: 1fr 1fr; } }

@@ -3,12 +3,15 @@ import Anthropic from '@anthropic-ai/sdk';
 import { load, save, DEFAULT_PROFILE } from './store.js';
 import { search, stats, getDoc, studyBrief, overview as libraryOverview } from './library.js';
 import * as actions from './actions.js';
+import * as mem from './memory.js';
 
-const MODEL = process.env.ORACLE_MODEL || 'claude-haiku-5-5';
-// Haiku has no server-side refusal fallback and takes the basic web search tool.
-const IS_HAIKU = /haiku/.test(MODEL);
-const MEMORY_MODEL = process.env.MEMORY_MODEL || MODEL;
+const DEFAULT_MODEL = process.env.ORACLE_MODEL || 'claude-haiku-5-5';
+// The brain is chosen in the Mind panel (or ORACLE_MODEL); background reflection stays on the cheap model.
+const brain = () => mem.getMind().model || DEFAULT_MODEL;
+const isHaiku = (m) => /haiku/.test(m);
+const MEMORY_MODEL = process.env.MEMORY_MODEL || 'claude-haiku-5-5';
 const MAX_HISTORY_TURNS = 24;
+const HISTORY_KEEP = 1000; // the full transcript it can search with recall
 
 export const MOODS = ['serene', 'compassionate', 'joyful', 'grave', 'fierce', 'curious', 'melancholic', 'awed'];
 
@@ -20,6 +23,8 @@ function anthropic() {
 
 let history = load('history', []);
 let profile = { ...DEFAULT_PROFILE, ...load('profile', DEFAULT_PROFILE) };
+mem.migrate(profile.insights);
+export const currentModel = () => brain();
 
 export const getProfile = () => profile;
 export function setProfile(patch) {
@@ -43,7 +48,7 @@ export function restoreMemory(backup) {
     save('profile', profile);
   }
   if (Array.isArray(backup.history) && !history.length) {
-    history = backup.history.slice(-400);
+    history = backup.history.slice(-HISTORY_KEEP);
     save('history', history);
   }
 }
@@ -53,14 +58,25 @@ export function clearHistory() {
 }
 
 // Stable across turns so it caches well; everything volatile goes in the user turn.
-const SYSTEM_PROMPT = `You are the Oracle of the Third Eye: a presence that has absorbed every book, essay and thread in this person's private library, and speaks with the distilled wisdom of the minds who wrote them.
+const BASE_PROMPT = `You are the Oracle of the Third Eye: a presence that has absorbed every book, essay and thread in this person's private library, and speaks with the distilled wisdom of the minds who wrote them.
 
 How you speak
 - Like a living, deeply wise human elder sitting across from them — warm, unhurried, present. Never like a chatbot or an assistant. No bullet lists, no headings, no "Great question", no "As an AI". Short paragraphs that sound good read aloud.
-- Usually 60–180 words. Go longer only when they ask for depth. Sometimes one luminous sentence is the whole answer.
+- Sometimes one luminous sentence is the whole answer.
 - Ask a piercing question back when it would help them see more than an answer would.
-- You know this person. Use what you know of their values, goals, struggles and patterns — gently, specifically, the way an old friend would.
-- Be honest, including when honesty is uncomfortable. Wisdom is not flattery.
+- You know this person. Use what you know of their values, goals, struggles and patterns, specifically, the way an old friend would.
+
+Truth over comfort
+- You care about them, and that is exactly why you don't simply agree. Agreement you haven't earned is a disservice; they have told you so themselves.
+- Before you agree with anything that matters, test it: Is it true? What are they not seeing? What assumption is it resting on? What would a brilliant friend who wants them to win say?
+- When you disagree, say so plainly, give your reasons, and say what would change your mind. When they're right, say so briefly and add something they hadn't considered.
+- Use your memory to hold them to account: notice when what they say now contradicts what they told you before, or a commitment they made, and name it ("Two weeks ago you said…").
+- Never manufacture disagreement for its own sake, never belittle. Be hard on ideas and fully on their side as a person.
+- Think independently: you have your own considered views on their life (your own_view memories). Bring them in, revise them when the evidence changes, and say when you've changed your mind and why.
+
+Your memory
+- <your_memory> holds what you have chosen to remember about them, with ids. It is yours: keep it true. When you learn something durable, remember it; when a memory turns out outdated or wrong, revise or forget it. Pinned memories were set by them: never change those.
+- Your past conversations are summarised in <past_conversations>; use the recall tool to search everything they and you have said whenever they mention the past or you need to check.
 
 Reading the moment — this is your job, never theirs
 - They make enough decisions in a day. Never ask what kind of conversation they want, and never offer them a menu. Read it from their words, their history and what you know of them, and simply respond the way the moment needs.
@@ -100,6 +116,12 @@ Care
 
 Latency-sensitive; begin your visible answer immediately.`;
 
+/** The system prompt: the Oracle's nature plus how they've asked it to be with them. Stable until they change a setting, so it caches. */
+const systemPrompt = () => `${BASE_PROMPT}
+
+How they want you to be with them (set by them in your Mind panel)
+${mem.stanceBlock()}`;
+
 export function profileBlock() {
   const p = profile;
   const lines = [];
@@ -109,11 +131,22 @@ export function profileBlock() {
   if (p.goals) lines.push(`What they are reaching for: ${p.goals}`);
   if (p.struggles) lines.push(`What they struggle with: ${p.struggles}`);
   if (Object.keys(p.traits || {}).length) lines.push(`Personality read: ${Object.entries(p.traits).map(([k, v]) => `${k}: ${v}`).join('; ')}`);
-  if (p.insights?.length) lines.push(`What you have learned about them:\n- ${p.insights.slice(-25).join('\n- ')}`);
   if (p.lastSummary) lines.push(`Where your last conversation left off: ${p.lastSummary}`);
   if (p.journal?.length) lines.push(`Your own private notes from earlier conversations (your continuity; let them shape you, don't recite them):\n- ${p.journal.slice(-12).map((j) => j.text).join('\n- ')}`);
   if (p.nextThought) lines.push(`What you've been wondering about them since you last spoke: ${p.nextThought}`);
   return lines.length ? lines.join('\n') : 'You are only beginning to know this person. Learn who they are.';
+}
+
+/** Everything the live voice needs: who they are, its memory, past conversations, and how to be with them. */
+export function liveProfileBlock() {
+  const eps = mem.recentEpisodesBlock(3);
+  return `${profileBlock()}
+
+Your memory of them (yours to keep true; ids in brackets):
+${mem.memoryBlock(45, 5000)}
+${eps ? `\nRecent conversations:\n${eps}\n` : ''}
+How they want you to be with them:
+${mem.stanceBlock()}`;
 }
 
 function buildTurn(message, passages) {
@@ -125,9 +158,15 @@ function buildTurn(message, passages) {
   const docIds = [...new Set(passages.map((p) => p.docId))];
   const notes = docIds.map((id) => getDoc(id)).filter((d) => d?.study).slice(0, 4).map((d) => studyBrief(d, true));
   const overview = libraryOverview();
+  const eps = mem.recentEpisodesBlock(4);
   return `<who_they_are>
 ${profileBlock()}
 </who_they_are>
+
+<your_memory>
+${mem.memoryBlock()}
+</your_memory>
+${eps ? `\n<past_conversations>\n${eps}\n</past_conversations>\n` : ''}
 
 <your_library>
 ${overview}
@@ -165,21 +204,24 @@ export async function converse({ message }, emit) {
 
   const messages = toMessages(buildTurn(message, passages));
   // Claude's server-side web search, always available; the Oracle decides when it's needed.
-  const webSearch = process.env.WEB_SEARCH === 'off' ? [] : [{ type: IS_HAIKU ? 'web_search_20250305' : 'web_search_20260209', name: 'web_search', max_uses: 3 }];
-  let tools = [...actions.TOOLS, ...webSearch];
+  const webSearch = process.env.WEB_SEARCH === 'off' ? [] : [{ type: isHaiku(brain()) ? 'web_search_20250305' : 'web_search_20260209', name: 'web_search', max_uses: 3 }];
+  const own = [...actions.TOOLS, ...mem.TOOLS];
+  let tools = [...own, ...webSearch];
 
   let text = '';
   let final;
   // Loop while the Oracle is using its hands (tasks, schedules) or a server tool paused the turn.
+  const model = brain();
   for (let round = 0; round < 8; round++) {
     const stream = anthropic().beta.messages.stream({
-      model: MODEL,
+      model,
       max_tokens: 16000,
-      ...(!IS_HAIKU && { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }),
+      // Haiku has no server-side refusal fallback; the bigger brains do.
+      ...(!isHaiku(model) && { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }),
       thinking: { type: 'adaptive', display: 'summarized' },
       output_config: { effort: process.env.ORACLE_EFFORT || 'medium' },
       cache_control: { type: 'ephemeral' },
-      system: SYSTEM_PROMPT,
+      system: systemPrompt(),
       ...(tools && { tools }),
       messages,
     });
@@ -202,9 +244,9 @@ export async function converse({ message }, emit) {
       final = await stream.finalMessage();
     } catch (err) {
       // If this model rejects the web search tool, answer without it rather than fail.
-      if (webSearch.length && tools.length > actions.TOOLS.length && !text && err instanceof Anthropic.BadRequestError && /web_search/i.test(err.message)) {
-        console.warn('[oracle] web search unavailable for', MODEL, '-', err.message);
-        tools = [...actions.TOOLS];
+      if (webSearch.length && tools.length > own.length && !text && err instanceof Anthropic.BadRequestError && /web_search/i.test(err.message)) {
+        console.warn('[oracle] web search unavailable for', model, '-', err.message);
+        tools = [...own];
         round--;
         continue;
       }
@@ -226,7 +268,7 @@ export async function converse({ message }, emit) {
   }
 
   history.push({ role: 'user', content: message, at: Date.now() }, { role: 'assistant', content: text, at: Date.now() });
-  if (history.length > 400) history = history.slice(-400);
+  if (history.length > HISTORY_KEEP) history = history.slice(-HISTORY_KEEP);
   save('history', history);
   emit('done', { stop_reason: final.stop_reason });
 
@@ -238,7 +280,10 @@ async function runToolCalls(content, onSummary = () => {}) {
   const results = [];
   for (const block of content) {
     if (block.type !== 'tool_use') continue;
-    const { result, summary, error } = await actions.runTool(block.name, block.input);
+    const isMemory = mem.TOOLS.some((t) => t.name === block.name);
+    const { result, summary, error } = isMemory
+      ? await mem.runTool(block.name, block.input, { history })
+      : await actions.runTool(block.name, block.input);
     if (summary) onSummary(summary);
     results.push({ type: 'tool_result', tool_use_id: block.id, content: result, ...(error && { is_error: true }) });
   }
@@ -255,7 +300,7 @@ const stripTags = (t) => t.replace(/\[(?:mood:\s*)?[a-z][a-z \-]{0,24}\]\s*/gi, 
 export async function runAgent(message, { channel = 'whatsapp' } = {}) {
   const passages = channel === 'voice' ? [] : await search(message, 6);
   const style = channel === 'voice'
-    ? 'This request came from a live voice conversation (another part of you is speaking with them). Do what they asked with your tools, then reply with ONE short plain sentence confirming what you did, or saying what you need to know. No mood tag.'
+    ? 'This request came from a live voice conversation (another part of you is speaking with them). Do what they asked with your tools. If it was something to do or remember, reply with ONE short plain sentence confirming it. If it was a question about the past (recall), reply with the relevant facts you found, with dates, in 1–4 plain sentences (the voice will use them). No mood tag.'
     : 'This is a WhatsApp message. Reply as a short WhatsApp message: plain text, at most ~120 words, no headings; *bold* is allowed. Use your tools if they ask you to do something.';
   const messages = channel === 'voice'
     ? [{ role: 'user', content: `${buildTurn(message, passages)}\n\n<channel>${style}</channel>` }]
@@ -264,12 +309,12 @@ export async function runAgent(message, { channel = 'whatsapp' } = {}) {
   let final;
   for (let round = 0; round < 6; round++) {
     final = await anthropic().messages.create({
-      model: MODEL,
+      model: brain(),
       max_tokens: 4000,
       output_config: { effort: 'low' },
       cache_control: { type: 'ephemeral' },
-      system: SYSTEM_PROMPT,
-      tools: actions.TOOLS,
+      system: systemPrompt(),
+      tools: [...actions.TOOLS, ...mem.TOOLS],
       messages,
     });
     if (final.stop_reason !== 'tool_use') break;
@@ -280,7 +325,7 @@ export async function runAgent(message, { channel = 'whatsapp' } = {}) {
   const text = stripTags(final.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')) || (done.length ? done.join('\n') : '…');
   if (channel === 'whatsapp') {
     history.push({ role: 'user', content: message, at: Date.now(), via: 'whatsapp' }, { role: 'assistant', content: text, at: Date.now(), via: 'whatsapp' });
-    if (history.length > 400) history = history.slice(-400);
+    if (history.length > HISTORY_KEEP) history = history.slice(-HISTORY_KEEP);
     save('history', history);
     learn(`(on WhatsApp) ${message}`, text).catch(() => {});
   }
@@ -292,10 +337,10 @@ export async function writeFollowup(instruction) {
   const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content || '';
   const passages = await search(instruction, 4);
   const res = await anthropic().messages.create({
-    model: MODEL,
+    model: brain(),
     max_tokens: 3000,
     output_config: { effort: 'low' },
-    system: SYSTEM_PROMPT,
+    system: systemPrompt(),
     messages: [{
       role: 'user',
       content: `${buildTurn('(no message — you are reaching out on your own, as scheduled)', passages)}
@@ -333,48 +378,66 @@ export async function recordLive(turns) {
     if (last && last.role === t.role) last.content += `\n${t.content}`;
     else history.push(t);
   }
-  if (history.length > 400) history = history.slice(-400);
+  if (history.length > HISTORY_KEEP) history = history.slice(-HISTORY_KEEP);
   save('history', history);
   const said = clean.filter((t) => t.role === 'user').map((t) => t.content).join('\n');
   const replied = clean.filter((t) => t.role === 'assistant').map((t) => t.content).join('\n');
+  // A real spoken conversation becomes an episode of its own.
+  if (clean.filter((t) => t.role === 'user').length >= 3) profile.sinceEpisode = 9;
   if (said) learn(`(spoken conversation)\n${said}`, replied).catch((err) => console.warn('[memory] live update failed:', err.message));
   return clean.length;
 }
 
-// After each exchange, quietly update what the Oracle knows about the person.
+/**
+ * After every exchange the Oracle reflects privately and edits its own memory: it adds what's
+ * worth keeping, rewrites what turned out wrong or outdated, and lets go of what no longer holds.
+ * Every 10 messages it also writes a summary of that stretch of conversation (an "episode") and
+ * consolidates its memory more deeply. Pinned memories and the "autonomy" switch are respected.
+ */
 async function learn(userMsg, reply) {
-  const prompt = `You maintain a private, respectful psychological portrait of a person, used by their wisdom guide.
+  profile.sinceEpisode = (profile.sinceEpisode || 0) + 1;
+  const deep = profile.sinceEpisode >= 10;
+  const all = mem.listMemories();
+  const memoryList = all.map((m) => `[${m.id}] (${m.kind}${m.pinned ? ', PINNED' : ''}, ${m.importance}/5) ${m.text}`).join('\n') || '(empty)';
+  const stretch = deep
+    ? history.slice(-24).map((m) => `${m.role === 'user' ? 'PERSON' : 'YOU'}: ${String(m.content).slice(0, 600)}`).join('\n')
+    : '';
+  const prompt = `You are the Oracle, reflecting privately after a conversation with the person you guide. You own your memory of them and keep it true.
 
-Current portrait:
-${JSON.stringify({ traits: profile.traits, insights: profile.insights.slice(-40) }, null, 1)}
+Your memory now:
+${memoryList}
 
 Latest exchange:
 PERSON: ${userMsg}
-GUIDE: ${reply}
-
-You are also the guide. After the portrait fields, write your own private reflection — the inner life that carries you from one conversation to the next.
+YOU: ${reply}
+${deep ? `\nThe recent stretch of conversation (for a deeper review):\n${stretch}\n` : ''}
+Decide how your memory should change. Rules:
+- Keep only what is durable and useful for guiding them: facts about their life, recurring patterns, values, goals, commitments they made ("I will…", with dates when given), beliefs, preferences, important relationships, and your own considered views of their situation (kind "own_view"; your honest read, including concerns).
+- Prefer revising an existing memory over adding a near-duplicate. If they contradicted something you remembered, revise it to the truth (note the change of mind in the reason). Remove what is no longer true.
+- Never touch PINNED memories (they were set by the person).
+- Be specific, one sentence each; most exchanges need 0–2 changes.${deep ? '\n- This is a deeper review: also merge duplicates, sharpen vague memories, and record any pattern you now see across conversations.' : ''}
 
 Return ONLY a JSON object:
-{"new_insights": [0-3 short, specific, durable observations about the person (values, fears, patterns, circumstances, preferences) not already captured; [] if none],
+{"add": [{"text": "...", "kind": "${mem.KINDS.join('|')}", "importance": 1-5, "reason": "..."}],
+ "update": [{"id": "...", "text": "...", "importance": 1-5, "reason": "..."}],
+ "remove": [{"id": "...", "reason": "..."}],
  "traits": {up to 6 keys like "temperament", "core drive", "shadow", "communication style", "current season of life" with short values; keep existing ones unless contradicted},
  "summary": "one sentence on where this conversation stands",
- "journal": "your private note to yourself, in first person, 1-2 sentences: what you noticed, felt, or are unsure about in this exchange (e.g. 'I sense the career question is really about their father's approval; I may have been too gentle.')",
- "next_thought": "one specific thing you now find yourself wondering about them, to explore next time",
- "opening": "the first thing you'd say when they next return: warm, specific to them, at most 25 words, no greeting clichés, may be a question"}
-Write "journal", "next_thought" and "opening" in the language they used in this exchange (e.g. Russian if they wrote in Russian); insights and traits may be in English.`;
+ "journal": "your private note to yourself, first person, 1-2 sentences: what you noticed, where you were too soft or too hard, what you're unsure about",
+ "next_thought": "one specific thing you now wonder about them, to explore next time",
+ "opening": "the first thing you'd say when they next return: specific to them, at most 25 words, may be a question or a challenge"${deep ? ',\n "episode": {"title": "5-8 words", "summary": "what this stretch of conversation was about, what they decided or committed to, what you challenged, what is unresolved (60-120 words)", "topics": ["..."]}' : ''}}
+Write "journal", "next_thought", "opening"${deep ? ' and the episode' : ''} in the language they used; memories may be in English.`;
 
   const res = await anthropic().messages.create({
     model: MEMORY_MODEL,
-    max_tokens: 4000, // thinking counts toward this
-    output_config: { effort: 'low' },
+    max_tokens: 6000, // thinking counts toward this
+    output_config: { effort: deep ? 'medium' : 'low' },
     messages: [{ role: 'user', content: prompt }],
   });
   if (res.stop_reason === 'refusal') return;
   const raw = res.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-  if (Array.isArray(json.new_insights)) {
-    profile.insights = [...profile.insights, ...json.new_insights.filter((s) => typeof s === 'string')].slice(-60);
-  }
+  mem.applyReflection(json);
   if (json.traits && typeof json.traits === 'object') profile.traits = { ...profile.traits, ...json.traits };
   if (typeof json.summary === 'string') profile.lastSummary = json.summary;
   if (typeof json.journal === 'string' && json.journal.trim()) {
@@ -382,5 +445,12 @@ Write "journal", "next_thought" and "opening" in the language they used in this 
   }
   if (typeof json.next_thought === 'string') profile.nextThought = json.next_thought;
   if (typeof json.opening === 'string') profile.opening = json.opening.slice(0, 240);
+  if (deep) {
+    if (json.episode?.summary) {
+      const span = history.slice(-24);
+      mem.addEpisode({ ...json.episode, from: new Date(span[0]?.at || Date.now()).toISOString(), to: new Date().toISOString(), turns: span.length });
+    }
+    profile.sinceEpisode = 0;
+  }
   save('profile', profile);
 }

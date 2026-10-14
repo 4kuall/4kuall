@@ -79,8 +79,9 @@ alter table oracle_vectors enable row level security;
 export async function init() {
   if (mode === 'local') {
     fs.mkdirSync(path.join(DATA_DIR, 'vectors'), { recursive: true });
-    for (const name of ['profile', 'history', 'tasks', 'automations', 'inbox', 'prefs']) {
-      try { kv.set(name, JSON.parse(fs.readFileSync(path.join(DATA_DIR, `${name}.json`), 'utf8'))); } catch { /* fresh */ }
+    // Every saved key lives in its own <name>.json (the library has its own file).
+    for (const file of fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.json') && f !== 'library.json')) {
+      try { kv.set(file.slice(0, -5), JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'))); } catch { /* unreadable: start fresh */ }
     }
     try { library = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'library.json'), 'utf8')); } catch { /* fresh */ }
     for (const d of library.docs) {

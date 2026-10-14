@@ -45,6 +45,38 @@ When it speaks, ripples run out from the eye with its real voice. When it thinks
 
 The eye runs on a small attention system. It holds your gaze when listening, follows your pointer, watches you type, and wanders around the room when you go quiet.
 
+## Its mind: memory you control, and a sparring partner rather than a yes-man
+
+**It remembers, and it rewrites its own memory.**
+- **Individual memories.** The Oracle keeps memories as separate items: facts, patterns, values, goals, commitments, beliefs, preferences, relationships, and its own views of your situation.
+- **Reflection after every exchange.** After each exchange it decides what to add, which memory to rewrite because it turned out wrong or outdated, and what to let go of. It records why for every change.
+- **Mid-conversation edits.** It can also do this during a conversation ("remember…", "forget…").
+
+**It remembers your past conversations.**
+- **Episodes.** Every ~10 messages, and after each spoken conversation, it writes a summary of what you talked about, what you decided and what's unresolved.
+- **Searchable history.** It searches those summaries and the full transcript (the last 1,000 messages) whenever you mention the past.
+
+**It thinks with you, not just agrees.** Its core instructions now include "truth over comfort":
+- It tests what you say before agreeing.
+- It argues the other side before you commit.
+- It names contradictions with what you told it before, and the commitments you made.
+- It offers unconventional options.
+- It holds its own views and says when it changes its mind.
+- It's hard on ideas and on your side as a person.
+
+**You control everything (Mind tab):**
+- **Challenge, from 1 to 5.** At 1 it's a gentle supporter; at 5 it's your toughest sparring partner. The default is 4.
+- **Warmth and depth.**
+- **Its brain.** Haiku 5.5 is the cheapest. Sonnet 5.5 is sharper and costs about 20× Haiku. Opus 5.5 is the deepest and costs about 40× Haiku. These are rough figures from Anthropic's current prices; check anthropic.com/pricing.
+- **Behaviour switches.** Turn devil's advocate and out-of-the-box thinking on or off.
+- **Self-editing switch.** Choose whether it may rewrite its memory by itself.
+- **Your rules.** Free text that overrides everything.
+- **Every memory.** See it, search it, edit it, change its importance, or delete it. **Pin** a memory and the Oracle can never change or delete it (memories you add are pinned automatically).
+- **Change log.** See every change it made to its mind, and why.
+- **Episodes.** See and delete conversation summaries.
+
+The live voice gets the same memory, past conversations and settings. It can remember, revise, forget and recall mid-call.
+
 ## Tasks, automations and WhatsApp
 
 Just ask, by voice or text, in English or Russian:

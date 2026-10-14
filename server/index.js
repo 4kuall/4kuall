@@ -12,6 +12,7 @@ await store.init();
 const library = await import('./library.js');
 const oracle = await import('./oracle.js');
 const actions = await import('./actions.js');
+const mem = await import('./memory.js');
 actions.init({ generate: (instruction) => oracle.writeFollowup(instruction), quote: (topic, avoid) => library.pickQuote(topic, avoid) });
 actions.startScheduler();
 
@@ -33,7 +34,8 @@ app.get('/healthz', async (req, res) => {
     liveAgent: Boolean(process.env.ELEVENLABS_AGENT_ID),
     passcodeSet: Boolean(process.env.ACCESS_TOKEN),
     commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7),
-    model: process.env.ORACLE_MODEL || 'claude-haiku-5-5',
+    model: oracle.currentModel(),
+    memories: mem.listMemories().length,
     memoryMB: Math.round(process.memoryUsage().rss / 1048576),
     semantic: library.stats().semantic.enabled ? 'on' : 'off',
     whatsapp: actions.channel().name,
@@ -121,7 +123,7 @@ app.get('/api/status', (_req, res) => {
     live: Boolean(process.env.ELEVENLABS_API_KEY && AGENT_ID),
     library: lib,
     integrations: [
-      { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? process.env.ORACLE_MODEL || 'claude-haiku-5-5' : 'Set ANTHROPIC_API_KEY' },
+      { id: 'claude', name: 'Claude', role: 'Mind · reasoning · memory', connected: claude, detail: claude ? oracle.currentModel() : 'Set ANTHROPIC_API_KEY' },
       { id: 'websearch', name: 'Web Search', role: 'Live knowledge beyond your library', connected: claude, detail: 'Automatic — the Oracle searches only when it needs to' },
       { id: 'live', name: 'Live conversation', role: 'Real-time voice · Eleven v4 Turbo · interruptible', connected: eleven && Boolean(AGENT_ID), detail: eleven && AGENT_ID ? 'Tap "Go live" to talk' : 'Set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID' },
       { id: 'elevenlabs', name: 'ElevenLabs', role: 'Voice out · speech-to-text in', connected: eleven, detail: eleven ? 'Voice + Scribe STT' : 'Set ELEVENLABS_API_KEY (browser voice used meanwhile)' },
@@ -200,7 +202,7 @@ app.delete('/api/library/:id', async (req, res) => {
 app.get('/api/backup', (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader('Content-Disposition', `attachment; filename="oracle-backup-${stamp}.json"`);
-  res.json({ app: 'oracle-third-eye', version: 1, createdAt: new Date().toISOString(), ...library.exportAll(), ...actions.exportAll(), profile: oracle.getProfile(), history: oracle.getHistory() });
+  res.json({ app: 'oracle-third-eye', version: 1, createdAt: new Date().toISOString(), ...library.exportAll(), ...actions.exportAll(), ...mem.exportAll(), profile: oracle.getProfile(), history: oracle.getHistory() });
 });
 
 app.post('/api/backup/restore', upload.single('backup'), async (req, res) => {
@@ -210,6 +212,7 @@ app.post('/api/backup/restore', upload.single('backup'), async (req, res) => {
     const added = await library.restore(data);
     oracle.restoreMemory(data);
     actions.restore(data);
+    mem.restore(data);
     res.json({ added });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -243,6 +246,25 @@ app.post('/api/act', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ---------- The Oracle's mind: memory, past conversations, how it thinks with you ----------
+app.get('/api/mind', (_req, res) => res.json({
+  settings: mem.getMind(),
+  models: mem.MODELS,
+  kinds: mem.KINDS,
+  defaultModel: process.env.ORACLE_MODEL || 'claude-haiku-5-5',
+  memories: mem.listMemories(),
+  episodes: mem.listEpisodes(),
+  changes: mem.getChanges().slice(0, 60),
+}));
+app.put('/api/mind/settings', (req, res) => res.json(mem.setMind(req.body || {})));
+const mindRoute = (fn) => (req, res) => {
+  try { res.json(fn(req)); } catch (err) { res.status(400).json({ error: err.message }); }
+};
+app.post('/api/memories', mindRoute((req) => mem.addMemory({ ...req.body, pinned: req.body.pinned ?? true }, 'you', 'added by you')));
+app.put('/api/memories/:id', mindRoute((req) => mem.updateMemory(req.params.id, req.body || {}, 'you', 'edited by you')));
+app.delete('/api/memories/:id', mindRoute((req) => mem.removeMemory(req.params.id, 'you', 'deleted by you')));
+app.delete('/api/episodes/:id', mindRoute((req) => { mem.removeEpisode(req.params.id); return { ok: true }; }));
 
 // ---------- Soul profile & memory ----------
 app.get('/api/profile', (_req, res) => res.json(oracle.getProfile()));
@@ -303,7 +325,7 @@ app.get('/api/live/start', async (req, res) => {
       greeting: p.opening || (req.query.lang === 'ru'
         ? (p.name ? `${p.name}. Я здесь. Что у тебя на сердце?` : 'Я здесь. Что у тебя на сердце?')
         : (p.name ? `${p.name}. I'm here. What's on your heart?` : "I'm here. What's on your heart?")),
-      profile: oracle.profileBlock().slice(0, 6000),
+      profile: oracle.liveProfileBlock().slice(0, 9000),
       library_overview: library.overview().slice(0, 3000),
     },
   });

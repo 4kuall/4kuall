@@ -39,7 +39,7 @@
       <button data-view-link="library">Library <span class="count" id="lib-count">0</span></button>
       <button data-view-link="discover">Discover <span class="badge">New</span></button>
       <button data-view-link="tasks">Tasks <span class="count" id="task-count">0</span></button>
-      <button data-view-link="soul">Soul</button>
+      <button data-view-link="soul">Mind <span class="count" id="mem-count">0</span></button>
       <button data-view-link="integrations">Integrations</button>
     </div>
     <div class="nav-right">
@@ -143,11 +143,43 @@
     <div class="card"><b>Recently sent</b><small>Everything it sent you, also kept here</small><ul class="inbox-list" id="inbox-list"></ul></div>
   </section>
 
-  <!-- ───────── Soul ───────── -->
+  <!-- ───────── Mind: memory, past conversations, how it thinks ───────── -->
   <section class="view sheet" id="view-soul" hidden>
     <div class="sheet-head">
-      <div><span class="kicker">Private · stored on your machine</span><h2>Your <em>Soul</em></h2></div>
+      <div><span class="kicker">Its mind, fully in your hands</span><h2>The Oracle's <em>Mind</em></h2></div>
+      <div class="stats" id="mind-stats"></div>
     </div>
+
+    <form class="card form mind-form" id="mind-form">
+      <b>How it thinks with you</b><small>Changes apply from the next message, in chat, voice and WhatsApp.</small>
+      <div class="dials">
+        <label>Challenge <output id="challenge-out"></output><input type="range" name="challenge" min="1" max="5" step="1" /></label>
+        <label>Warmth <output id="warmth-out"></output><input type="range" name="warmth" min="1" max="5" step="1" /></label>
+        <label>Depth<select name="depth"><option value="brief">Brief</option><option value="balanced">Balanced</option><option value="deep">Deep</option></select></label>
+        <label>Brain (typed chat, WhatsApp)<select name="model" id="model-select"></select></label>
+      </div>
+      <div class="toggles">
+        <label class="check"><input type="checkbox" name="devilsAdvocate" /> Argue the other side before I commit to something</label>
+        <label class="check"><input type="checkbox" name="outOfBox" /> Think out of the box: reframes and unconventional options</label>
+        <label class="check"><input type="checkbox" name="autonomy" /> Let it rewrite its own memory by itself</label>
+      </div>
+      <label>Your rules for the Oracle (they override everything)<textarea name="rules" rows="3" placeholder="e.g. Never sugar-coat. Call me out when I procrastinate. Always end with one concrete next step."></textarea></label>
+      <div class="row-end"><span class="toast" id="mind-status"></span><button class="btn-lime">Save rules</button></div>
+    </form>
+
+    <div class="two-col">
+      <div class="card">
+        <b>Its memory</b><small>It keeps this true on its own. Edit ✎, pin 📌 (it can't change pinned ones), or delete ✕. Tap the dots to change importance.</small>
+        <form class="row add-memory" id="add-memory"><input id="new-memory" placeholder="Tell it something to always remember…" /><select id="new-kind"></select><button class="btn-lime sm">Add</button></form>
+        <input id="memory-search" class="memory-search" placeholder="Search its memory…" />
+        <ul class="memories" id="memories"></ul>
+      </div>
+      <div>
+        <div class="card"><b>What changed in its mind</b><small>Every addition, rewrite and deletion, and why</small><ul class="changes" id="changes"></ul></div>
+        <div class="card"><b>Past conversations</b><small>It writes these itself and searches them when you mention the past</small><ul class="episodes" id="episodes"></ul></div>
+      </div>
+    </div>
+
     <div class="two-col">
       <form class="card form" id="soul-form">
         <b>Tell it who you are</b><small>It also learns on its own as you talk.</small>
@@ -158,10 +190,7 @@
         <label>What weighs on you<textarea name="struggles" rows="2"></textarea></label>
         <button class="btn-lime">Save</button>
       </form>
-      <div>
-        <div class="card"><b>Personality read</b><small>Inferred from your conversations</small><div class="traits" id="traits"></div></div>
-        <div class="card"><b>What the Oracle has learned</b><small>Click any insight to make it forget</small><ul class="insights" id="insights"></ul></div>
-      </div>
+      <div class="card"><b>Personality read</b><small>Inferred from your conversations</small><div class="traits" id="traits"></div></div>
     </div>
   </section>
 
